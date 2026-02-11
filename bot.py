@@ -59,9 +59,12 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # =========================
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-creds = Credentials.from_service_account_file(GOOGLE_CREDS_FILE, scopes=SCOPES)
-gc = gspread.authorize(creds)
+
 info = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+
+gc = gspread.authorize(creds)
+
 
 def ws(name):
     return gc.open_by_key(SPREADSHEET_ID).worksheet(name)
