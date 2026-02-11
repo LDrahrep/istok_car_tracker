@@ -9,6 +9,8 @@ import difflib
 from datetime import time, timedelta
 from zoneinfo import ZoneInfo
 from typing import Dict, List, Optional
+import os, json
+from google.oauth2.service_account import Credentials
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -59,6 +61,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_file(GOOGLE_CREDS_FILE, scopes=SCOPES)
 gc = gspread.authorize(creds)
+info = json.loads(os.environ["GOOGLE_CREDENTIALS"])
 
 def ws(name):
     return gc.open_by_key(SPREADSHEET_ID).worksheet(name)
