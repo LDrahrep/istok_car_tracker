@@ -948,27 +948,19 @@ def main():
     app.add_handler(CommandHandler("my_driver", my_driver_cmd))
     app.add_handler(CommandHandler("cancel", cancel_cmd))
 
-    # кнопки меню
-    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_MY}$"), my_driver_cmd))
-    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_CANCEL}$"), cancel_cmd))
-    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_SHUT}$"), shutdown_cmd))
-    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_FORCE_WEEKLY}$"), force_weekly_check))
-
-
-    # add_driver conversation
+    # add_driver conversation (group 0 = higher priority than menu buttons)
     add_driver_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{BTN_ADD}$"), add_driver_start)],
         states={
-    ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_driver_name)],
-    CONFIRM_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_phone)],
-    ADD_SHIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_driver_shift)],
-    ADD_CAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_driver_car)],
-    ADD_PLATES: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_driver_plates)],
-    },
-
+            ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_driver_name)],
+            CONFIRM_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_phone)],
+            ADD_SHIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_driver_shift)],
+            ADD_CAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_driver_car)],
+            ADD_PLATES: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_driver_plates)],
+        },
         fallbacks=[MessageHandler(filters.Regex(f"^{BTN_CANCEL}$"), cancel_cmd)],
     )
-    app.add_handler(add_driver_conv)
+    app.add_handler(add_driver_conv, group=0)
 
     # passengers conversation
     passengers_conv = ConversationHandler(
@@ -976,7 +968,7 @@ def main():
         states={PASS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, passengers_input)]},
         fallbacks=[MessageHandler(filters.Regex(f"^{BTN_CANCEL}$"), cancel_cmd)],
     )
-    app.add_handler(passengers_conv)
+    app.add_handler(passengers_conv, group=0)
 
     # delete passenger conversation
     delete_conv = ConversationHandler(
@@ -984,10 +976,16 @@ def main():
         states={DEL_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_input)]},
         fallbacks=[MessageHandler(filters.Regex(f"^{BTN_CANCEL}$"), cancel_cmd)],
     )
-    app.add_handler(delete_conv)
+    app.add_handler(delete_conv, group=0)
+
+    # кнопки меню (group 1 = ниже приоритет, чтобы не перебивать активные ConversationHandler)
+    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_MY}$"), my_driver_cmd), group=1)
+    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_CANCEL}$"), cancel_cmd), group=1)
+    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_SHUT}$"), shutdown_cmd), group=1)
+    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_FORCE_WEEKLY}$"), force_weekly_check), group=1)
 
     # daily answers (Да/Нет)
-    app.add_handler(MessageHandler(filters.Regex(r"^(Да|да|Нет|нет)$"), daily_answer_handler))
+    app.add_handler(MessageHandler(filters.Regex(r"^(Да|да|Нет|нет)$"), daily_answer_handler), group=2)
 
     # weekly jobs (Sunday only)
     app.job_queue.run_daily(daily_ask_driver, time=parse_time(DAY_SHIFT_TIME), days=(6,), data="day")
