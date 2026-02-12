@@ -280,7 +280,7 @@ async def confirm_phone(update, context):
 
     # дальше продолжаем диалог
     await update.message.reply_text(
-    "Выберите Shift:",
+    "В какой смене ты работаешь?",
     reply_markup=shift_kb(),
     )
     return ADD_SHIFT
@@ -301,7 +301,7 @@ async def add_driver_shift(update, context):
         )
         return ADD_SHIFT
 
-    await update.message.reply_text("Введите Car:", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("На какой машине ты ездишь? Напиши:", reply_markup=ReplyKeyboardRemove())
     return ADD_CAR
 
 
