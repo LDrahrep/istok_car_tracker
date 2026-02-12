@@ -92,6 +92,14 @@ def yes_no_kb():
         one_time_keyboard=True,
     )
 
+def shift_kb():
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("Day"), KeyboardButton("Night")]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -272,19 +280,30 @@ async def confirm_phone(update, context):
 
     # дальше продолжаем диалог
     await update.message.reply_text(
-        "В какой смене ты работаешь? Напиши DAY или NIGHT:",
-        reply_markup=ReplyKeyboardRemove(),
+    "Выберите Shift:",
+    reply_markup=shift_kb(),
     )
     return ADD_SHIFT
 
+
 async def add_driver_shift(update, context):
-    shift = (update.message.text or "").strip()
-    if not shift:
-        await update.message.reply_text("ТЫ НЕ УКАЗАЛ СМЕНУ. Напиши DAY или NIGHT:")
+    raw = (update.message.text or "").strip()
+    shift_norm = normalize_shift_value(raw)  # day/night/"" (понимает и русские варианты)
+
+    if shift_norm == "day":
+        context.user_data["shift_manual"] = "Day"
+    elif shift_norm == "night":
+        context.user_data["shift_manual"] = "Night"
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, выберите Shift кнопками: Day или Night.",
+            reply_markup=shift_kb(),
+        )
         return ADD_SHIFT
-    context.user_data["shift_manual"] = shift
-    await update.message.reply_text("Какая у тебя машина? НАЗВАНИЕ НА АНГЛИЙСКОМ")
+
+    await update.message.reply_text("Введите Car:", reply_markup=ReplyKeyboardRemove())
     return ADD_CAR
+
 
 
 async def add_driver_car(update, context):
@@ -325,9 +344,9 @@ async def add_driver_plates(update, context):
     add_driver_self_to_employees(name, tg_id)
 
     if created:
-        await update.message.reply_text(f"✅ Водитель добавлен (строка {row_idx})")
+        await update.message.reply_text(f"✅ Водитель добавлен")
     else:
-        await update.message.reply_text(f"✅ Водитель обновлён (строка {row_idx})")
+        await update.message.reply_text(f"✅ Водитель обновлён")
 
     await show_menu(update, context)
 
@@ -342,9 +361,8 @@ PASS_INPUT = 10
 
 async def passengers_start(update, context):
     await update.message.reply_text(
-        "Введите имена пассажиров (до 4) через запятую или с новой строки:\n\n"
-        "Пример:\nИван Иванов, Пётр Петров\n\n"
-        "или:\nИван Иванов\nПётр Петров"
+        "Напиши имена пассажиров НА АНГЛИЙСКОМ (до 4), каждого с новой строки:\n\n"
+        "Ivan Ivanov\nPetr Petrov"
     )
     return PASS_INPUT
 
