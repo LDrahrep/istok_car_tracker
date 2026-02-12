@@ -8,6 +8,7 @@ import json
 import logging
 from datetime import time, timedelta
 from zoneinfo import ZoneInfo
+import difflib
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -421,10 +422,20 @@ async def passengers_input(update, context):
         key = norm(passenger)
 
         if key not in emp_index:
-            await update.message.reply_text(
-                f"Пассажир '{passenger}' не найден в employees. Проверьте написание."
-            )
-            return ConversationHandler.END
+            all_names = list(emp_index.keys())
+            matches = difflib.get_close_matches(key, all_names, n=3, cutoff=0.6)
+
+            if matches:
+                suggestions = "\n".join([f"• {emp_index[m][1].get('Employee')}" for m in matches])
+                await update.message.reply_text(
+                    f"Пассажир '{passenger}' не найден.\n\nВозможно, вы имели в виду:\n{suggestions}"
+                )
+            else:
+                await update.message.reply_text(
+                    f"Пассажир '{passenger}' не найден в employees. Проверьте написание."
+                )
+
+            return PASS_INPUT
 
         row_num, row = emp_index[key]
 
