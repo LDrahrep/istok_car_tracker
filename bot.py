@@ -223,7 +223,7 @@ ADD_NAME, CONFIRM_PHONE, ADD_SHIFT, ADD_CAR, ADD_PLATES = range(5)
 
 async def add_driver_start(update, context):
     context.user_data.clear()
-    await update.message.reply_text("Введите имя работника:")
+    await update.message.reply_text("Введи СВОИ Имя и Фамилию на АНГЛИЙСКОМ ЯЗЫКЕ")
     return ADD_NAME
 
 
@@ -272,7 +272,7 @@ async def confirm_phone(update, context):
 
     # дальше продолжаем диалог
     await update.message.reply_text(
-        "Введите Shift (Day или Night):",
+        "В какой смене ты работаешь? Напиши DAY или NIGHT:",
         reply_markup=ReplyKeyboardRemove(),
     )
     return ADD_SHIFT
@@ -280,27 +280,27 @@ async def confirm_phone(update, context):
 async def add_driver_shift(update, context):
     shift = (update.message.text or "").strip()
     if not shift:
-        await update.message.reply_text("Shift пустой. Введите Shift (Day/Night):")
+        await update.message.reply_text("ТЫ НЕ УКАЗАЛ СМЕНУ. Напиши DAY или NIGHT:")
         return ADD_SHIFT
     context.user_data["shift_manual"] = shift
-    await update.message.reply_text("Введите Car:")
+    await update.message.reply_text("Какая у тебя машина? НАЗВАНИЕ НА АНГЛИЙСКОМ")
     return ADD_CAR
 
 
 async def add_driver_car(update, context):
     car = (update.message.text or "").strip()
     if not car:
-        await update.message.reply_text("Car пустой. Введите Car:")
+        await update.message.reply_text("ТЫ НЕ ВПИСАЛ МАШИНУ. Напиши название НА АНГЛИЙСКОМ:")
         return ADD_CAR
     context.user_data["car"] = car
-    await update.message.reply_text("Введите Plates:")
+    await update.message.reply_text("укажи LICENCE PLATES")
     return ADD_PLATES
 
 
 async def add_driver_plates(update, context):
     plates = (update.message.text or "").strip()
     if not plates:
-        await update.message.reply_text("Plates пустой. Введите Plates:")
+        await update.message.reply_text("ТЫ НЕ ВПИСАЛ LICENCE PLATES, Напиши Еще раз:")
         return ADD_PLATES
 
     name = context.user_data.get("name")
@@ -329,7 +329,10 @@ async def add_driver_plates(update, context):
     else:
         await update.message.reply_text(f"✅ Водитель обновлён (строка {row_idx})")
 
+    await show_menu(update, context)
+
     return ConversationHandler.END
+
 
 # =========================
 # PASSENGERS LOGIC
@@ -504,6 +507,7 @@ async def passengers_input(update, context):
     add_driver_self_to_employees(driver_name, int(driver_tg))
 
     await update.message.reply_text("✅ Пассажиры добавлены.")
+    await show_menu(update, context)
     return ConversationHandler.END
 
 # =========================
@@ -609,6 +613,7 @@ async def delete_input(update, context):
             break
 
     await update.message.reply_text("✅ Пассажир удалён.")
+    await show_menu(update, context)
     return ConversationHandler.END
 
 # =========================
