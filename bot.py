@@ -4,28 +4,15 @@
 # =========================
 
 import os
+import json
 import logging
-import difflib
 from datetime import time, timedelta
 from zoneinfo import ZoneInfo
-from typing import Dict, List, Optional
-import os, json
+
+import gspread
 from google.oauth2.service_account import Credentials
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardRemove,
-)
 
-
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardRemove,
-)
-
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -444,9 +431,7 @@ async def passengers_input(update, context):
             return ConversationHandler.END
 
         valid_rows.append((passenger, row_num))
-
-    # записываем в drivers_passengers
-        # записываем в drivers_passengers (UPDATE если строка уже есть, иначе APPEND)
+    # записываем в drivers_passengers (UPDATE если строка уже есть, иначе APPEND)
     dp = ws(DRIVERS_PASSENGERS_SHEET)
     dp_values = dp.get_all_values()
     if not dp_values:
@@ -672,7 +657,7 @@ async def daily_ask_driver(context: ContextTypes.DEFAULT_TYPE):
                 passengers = [p for p in passengers if p]
                 break
 
-        txt = "Ежедневная проверка 🚘\n\n"
+        txt = "Еженедельная проверка 🚘\n\n"
         txt += "Текущие пассажиры:\n"
         if passengers:
             txt += "\n".join([f"• {p}" for p in passengers])
@@ -916,7 +901,7 @@ def main():
     # daily answers (Да/Нет)
     app.add_handler(MessageHandler(filters.Regex(r"^(Да|да|Нет|нет)$"), daily_answer_handler))
 
-        # weekly jobs (Sunday only)
+    # weekly jobs (Sunday only)
     app.job_queue.run_daily(daily_ask_driver, time=parse_time(DAY_SHIFT_TIME), days=(6,), data="day")
     app.job_queue.run_daily(daily_ask_driver, time=parse_time(NIGHT_SHIFT_TIME), days=(6,), data="night")
 
