@@ -435,6 +435,7 @@ async def passengers_input(update, context):
                     f"Пассажир '{passenger}' не найден в employees. Проверьте написание."
                 )
 
+            await update.message.reply_text("Попробуй снова")
             return PASS_INPUT
 
         row_num, row = emp_index[key]
@@ -517,8 +518,30 @@ async def passengers_input(update, context):
     setv(c_phone, driver.get("Phone number", ""))
     setv(c_shift, driver.get("Shift", ""))
 
-    # пассажиры
-    padded = names + [""] * (4 - len(names))
+    # пассажиры (добавляем к текущему списку, не перезаписываем)
+    existing_passengers = []
+    if dp_row_idx:
+        # dp_values включает заголовок, поэтому строка dp_row_idx находится по индексу dp_row_idx-1
+        cur_row = dp_values[dp_row_idx - 1]
+        for c in (c_p1, c_p2, c_p3, c_p4):
+            if c is None:
+                continue
+            if c < len(cur_row) and cur_row[c].strip():
+                existing_passengers.append(cur_row[c].strip())
+
+    # merge: сначала существующие, потом новые (без дублей)
+    existing_norm = {norm(p) for p in existing_passengers}
+    merged = list(existing_passengers)
+    for n in names:
+        if norm(n) not in existing_norm:
+            merged.append(n)
+            existing_norm.add(norm(n))
+
+    if len(merged) > 4:
+        await update.message.reply_text("Максимум 4 пассажира.")
+        return PASS_INPUT
+
+    padded = merged + [""] * (4 - len(merged))
     setv(c_p1, padded[0] if c_p1 is not None else "")
     setv(c_p2, padded[1] if c_p2 is not None else "")
     setv(c_p3, padded[2] if c_p3 is not None else "")
