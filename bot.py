@@ -11,15 +11,21 @@ from zoneinfo import ZoneInfo
 from typing import Dict, List, Optional
 import os, json
 from google.oauth2.service_account import Credentials
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardRemove,
+)
 
-import gspread
-from google.oauth2.service_account import Credentials
 
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
     KeyboardButton,
+    ReplyKeyboardRemove,
 )
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -91,6 +97,14 @@ def menu(is_admin=False):
     if is_admin:
         rows.append([KeyboardButton(BTN_SHUT)])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
+
+def yes_no_kb():
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("Да"), KeyboardButton("Нет")]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -246,8 +260,10 @@ async def add_driver_name(update, context):
             context.user_data["shift"] = row.get("Shift", "")
 
             await update.message.reply_text(
-                f"Найден номер: {phone}\nЭто правильный номер?\n\nНапишите: Да или Нет"
+                f"Найден номер: {phone}\nЭто правильный номер?",
+                reply_markup=yes_no_kb(),
             )
+
             return CONFIRM_PHONE
 
     await update.message.reply_text(
@@ -257,14 +273,21 @@ async def add_driver_name(update, context):
 
 
 async def confirm_phone(update, context):
-    answer = update.message.text.strip().lower()
+    answer = (update.message.text or "").strip().lower()
 
     if answer != "да":
-        await update.message.reply_text("Запись не создана. Обратитесь к менеджеру.")
+        await update.message.reply_text(
+            "Запись не создана. Обратитесь к менеджеру.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await show_menu(update, context)
         return ConversationHandler.END
 
     # дальше продолжаем диалог
-    await update.message.reply_text("Введите Shift (Day или Night):")
+    await update.message.reply_text(
+        "Введите Shift (Day или Night):",
+        reply_markup=ReplyKeyboardRemove(),
+    )
     return ADD_SHIFT
 
 async def add_driver_shift(update, context):
@@ -423,14 +446,69 @@ async def passengers_input(update, context):
         valid_rows.append((passenger, row_num))
 
     # записываем в drivers_passengers
+        # записываем в drivers_passengers (UPDATE если строка уже есть, иначе APPEND)
     dp = ws(DRIVERS_PASSENGERS_SHEET)
-    dp.append_row([
-        driver.get("Name", ""),
-        driver.get("telegramID", ""),
-        driver.get("Phone number", ""),
-        driver.get("Shift", ""),
-        *(names + [""] * (4 - len(names)))
-    ])
+    dp_values = dp.get_all_values()
+    if not dp_values:
+        await update.message.reply_text("Лист drivers_passengers пустой (нет заголовков). Обратитесь к менеджеру.")
+        return ConversationHandler.END
+
+    headers = dp_values[0]
+    h = {norm(x): i for i, x in enumerate(headers)}
+
+    def col(name1, *alts):
+        for k in (name1, *alts):
+            if norm(k) in h:
+                return h[norm(k)]
+        return None
+
+    c_name = col("Name")
+    c_tg = col("TGID", "tgid")
+    c_phone = col("Phone Number", "Phone number", "phone number", "phone")
+    c_shift = col("Shift")
+    c_p1 = col("Passenger1", "Passenger 1")
+    c_p2 = col("Passenger2", "Passenger 2")
+    c_p3 = col("Passenger3", "Passenger 3")
+    c_p4 = col("Passenger4", "Passenger 4")
+
+    if c_tg is None:
+        await update.message.reply_text("В drivers_passengers должна быть колонка TGID. Обратитесь к менеджеру.")
+        return ConversationHandler.END
+
+    # ищем строку по TGID (B обычно, но не полагаемся на это)
+    dp_row_idx = None
+    for i, row in enumerate(dp_values[1:], start=2):
+        if c_tg < len(row) and row[c_tg].strip() == driver_tg:
+            dp_row_idx = i
+            break
+
+    # формируем новые значения (A..H / по заголовкам)
+    new_row = [""] * len(headers)
+
+    def setv(c0, v):
+        if c0 is None:
+            return
+        if c0 >= len(new_row):
+            return
+        new_row[c0] = v
+
+    setv(c_name, driver_name)
+    setv(c_tg, driver_tg)
+    setv(c_phone, driver.get("Phone number", ""))
+    setv(c_shift, driver.get("Shift", ""))
+
+    # пассажиры
+    padded = names + [""] * (4 - len(names))
+    setv(c_p1, padded[0] if c_p1 is not None else "")
+    setv(c_p2, padded[1] if c_p2 is not None else "")
+    setv(c_p3, padded[2] if c_p3 is not None else "")
+    setv(c_p4, padded[3] if c_p4 is not None else "")
+
+    if dp_row_idx:
+        # обновляем всю строку одним запросом
+        dp.update(f"A{dp_row_idx}:{chr(ord('A') + len(headers) - 1)}{dp_row_idx}", [new_row], value_input_option="USER_ENTERED")
+    else:
+        dp.append_row(new_row, value_input_option="USER_ENTERED")
 
     # обновляем employees (ТОЛЬКО D и E)
     for passenger, row_num in valid_rows:
@@ -604,7 +682,7 @@ async def daily_ask_driver(context: ContextTypes.DEFAULT_TYPE):
         txt += "Если не ответишь за 60 минут — запись будет очищена."
 
         try:
-            await context.bot.send_message(chat_id=tg_id, text=txt)
+            await context.bot.send_message(chat_id=tg_id, text=txt, reply_markup=yes_no_kb())
         except Exception:
             continue
 
@@ -625,35 +703,56 @@ async def daily_ask_driver(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def daily_timeout_clear(context: ContextTypes.DEFAULT_TYPE):
-    """
-    Если водитель не ответил за 60 минут — стираем пассажиров и открепляем в employees.
-    """
-    tg_id = int(context.job.data["tg_id"])
+    tg_id = str(context.job.data["tg_id"])
 
     # если к этому времени водитель уже ответил — ignore
-    if tg_id not in pending_confirmations:
+    if int(tg_id) not in pending_confirmations:
         return
 
-    pending_confirmations.pop(tg_id, None)
+    pending_confirmations.pop(int(tg_id), None)
 
-    # очистка passengers в drivers_passengers
     dp = ws(DRIVERS_PASSENGERS_SHEET)
     dp_vals = dp.get_all_values()
+    if not dp_vals:
+        return
+
+    headers = dp_vals[0]
+    h = {norm(x): i for i, x in enumerate(headers)}
+
+    def col(name1, *alts):
+        for k in (name1, *alts):
+            if norm(k) in h:
+                return h[norm(k)]
+        return None
+
+    c_tg = col("TGID", "tgid")
+    c_p1 = col("Passenger1", "Passenger 1")
+    c_p2 = col("Passenger2", "Passenger 2")
+    c_p3 = col("Passenger3", "Passenger 3")
+    c_p4 = col("Passenger4", "Passenger 4")
+
+    if c_tg is None:
+        return
+
+    passenger_cols = [c for c in [c_p1, c_p2, c_p3, c_p4] if c is not None]
 
     passengers_to_detach = []
+    target_row_idx = None
 
     for i, row in enumerate(dp_vals[1:], start=2):
-        if len(row) >= 2 and row[1].strip() == str(tg_id):
-            # пассажиры E..H
-            for c in range(4, 8):
-                if len(row) > c and row[c].strip():
+        if c_tg < len(row) and row[c_tg].strip() == tg_id:
+            target_row_idx = i
+            for c in passenger_cols:
+                if c < len(row) and row[c].strip():
                     passengers_to_detach.append(row[c].strip())
-            # очищаем E..H
-            for col in range(5, 9):
-                dp.update_cell(i, col, "")
             break
 
-    # открепляем в employees (D/E)
+    if target_row_idx is not None:
+        # очистка пассажиров одной пачкой
+        for c in passenger_cols:
+            dp.update_cell(target_row_idx, c + 1, "")
+
+    # открепляем в employees (D/E) только тех, кто был привязан к этому tg_id
     emp = ws(EMPLOYEES_SHEET)
     emp_vals = emp.get_all_values()
 
@@ -662,14 +761,14 @@ async def daily_timeout_clear(context: ContextTypes.DEFAULT_TYPE):
             emp_name = erow[0].strip() if len(erow) >= 1 else ""
             if norm(emp_name) == norm(p):
                 cur_tgid = erow[4].strip() if len(erow) >= 5 else ""
-                if cur_tgid == str(tg_id):
+                if cur_tgid == tg_id:
                     emp.update_cell(j, 4, "")
                     emp.update_cell(j, 5, "")
                 break
 
     try:
         await context.bot.send_message(
-            chat_id=tg_id,
+            chat_id=int(tg_id),
             text="⏰ 60 минут прошло — я очистил запись пассажиров. Если нужно — укажи заново кнопкой «👥 Указать пассажиров».",
         )
     except Exception:
@@ -677,16 +776,10 @@ async def daily_timeout_clear(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def daily_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Обрабатывает ответ 'Да' / 'Нет' на ежедневную проверку.
-    'Да' — ничего не меняем.
-    'Нет' — сразу очищаем запись.
-    """
     tg_id = update.effective_user.id
     txt = (update.message.text or "").strip().lower()
 
     if tg_id not in pending_confirmations:
-        # это не ответ на daily-check
         return
 
     # убрать таймер
@@ -698,7 +791,7 @@ async def daily_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     pending_confirmations.pop(tg_id, None)
 
     if txt == "да":
-        await update.message.reply_text("✅ Ок, ничего не меняю.")
+        await update.message.reply_text("✅ Ок, ничего не меняю.", reply_markup=ReplyKeyboardRemove())
         await show_menu(update, context)
         return
 
@@ -709,7 +802,10 @@ async def daily_answer_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         fake_context = type("C", (), {})()
         fake_context.job = fake_job
         fake_context.bot = context.bot
+
         await daily_timeout_clear(fake_context)
+
+        await update.message.reply_text("✅ Ок, запись очищена.", reply_markup=ReplyKeyboardRemove())
         await show_menu(update, context)
         return
 
@@ -820,9 +916,10 @@ def main():
     # daily answers (Да/Нет)
     app.add_handler(MessageHandler(filters.Regex(r"^(Да|да|Нет|нет)$"), daily_answer_handler))
 
-    # daily jobs (Memphis time)
-    app.job_queue.run_daily(daily_ask_driver, time=parse_time(DAY_SHIFT_TIME), data="day")
-    app.job_queue.run_daily(daily_ask_driver, time=parse_time(NIGHT_SHIFT_TIME), data="night")
+        # weekly jobs (Sunday only)
+    app.job_queue.run_daily(daily_ask_driver, time=parse_time(DAY_SHIFT_TIME), days=(6,), data="day")
+    app.job_queue.run_daily(daily_ask_driver, time=parse_time(NIGHT_SHIFT_TIME), days=(6,), data="night")
+
 
     print("Bot started.")
     app.run_polling(drop_pending_updates=True)
