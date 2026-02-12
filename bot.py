@@ -72,6 +72,8 @@ BTN_DEL = "🗑 Удалить пассажира"
 BTN_MY = "📄 Моя запись"
 BTN_CANCEL = "❌ Отмена"
 BTN_SHUT = "🛑 Shutdown"
+BTN_FORCE_WEEKLY = "📢 Запустить weekly-проверку"
+
 
 def menu(is_admin=False):
     rows = [
@@ -82,6 +84,7 @@ def menu(is_admin=False):
         [KeyboardButton(BTN_CANCEL)],
     ]
     if is_admin:
+        rows.append([KeyboardButton(BTN_FORCE_WEEKLY)])
         rows.append([KeyboardButton(BTN_SHUT)])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
@@ -863,6 +866,32 @@ async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_menu(update, context)
     return ConversationHandler.END
 
+async def force_weekly_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_USERS:
+        await update.message.reply_text("Нет доступа.")
+        return
+
+    # запускаем для day
+    fake_context_day = type("C", (), {})()
+    fake_context_day.job = type("J", (), {})()
+    fake_context_day.job.data = "day"
+    fake_context_day.bot = context.bot
+    fake_context_day.job_queue = context.job_queue
+
+    await daily_ask_driver(fake_context_day)
+
+    # запускаем для night
+    fake_context_night = type("C", (), {})()
+    fake_context_night.job = type("J", (), {})()
+    fake_context_night.job.data = "night"
+    fake_context_night.bot = context.bot
+    fake_context_night.job_queue = context.job_queue
+
+    await daily_ask_driver(fake_context_night)
+
+    await update.message.reply_text("✅ Weekly-проверка запущена вручную.")
+    await show_menu(update, context)
+
 
 # =========================
 # MAIN
@@ -889,6 +918,8 @@ def main():
     app.add_handler(MessageHandler(filters.Regex(f"^{BTN_MY}$"), my_driver_cmd))
     app.add_handler(MessageHandler(filters.Regex(f"^{BTN_CANCEL}$"), cancel_cmd))
     app.add_handler(MessageHandler(filters.Regex(f"^{BTN_SHUT}$"), shutdown_cmd))
+    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_FORCE_WEEKLY}$"), force_weekly_check))
+
 
     # add_driver conversation
     add_driver_conv = ConversationHandler(
