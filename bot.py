@@ -6,7 +6,7 @@
 import os
 import json
 import logging
-from datetime import time, timedelta
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 import difflib
 
@@ -683,6 +683,19 @@ async def daily_ask_driver(context: ContextTypes.DEFAULT_TYPE):
     shift_kind приходит в context.job.data: "day" or "night"
     """
     shift_kind = context.job.data
+    
+    # Guard: запускаем рассылку только в воскресенье (America/Chicago),
+    # кроме ручного запуска (job.name == "manual")
+    now_local = datetime.now(ZoneInfo(TIMEZONE))
+    job_name = getattr(getattr(context, "job", None), "name", None)
+    is_manual = (job_name == "manual")
+    if now_local.weekday() != 6 and not is_manual:
+        logging.info(
+            "Skip weekly check: not Sunday. now=%s tz=%s job_name=%s shift=%s",
+            now_local.isoformat(), TIMEZONE, job_name, shift_kind
+        )
+        return
+
 
     drv_sheet = ws(DRIVERS_SHEET)
     drivers = drv_sheet.get_all_records()
@@ -909,6 +922,7 @@ async def force_weekly_check(update: Update, context: ContextTypes.DEFAULT_TYPE)
     fake_context_day = type("C", (), {})()
     fake_context_day.job = type("J", (), {})()
     fake_context_day.job.data = "day"
+    fake_context_day.job.name = "manual"
     fake_context_day.bot = context.bot
     fake_context_day.job_queue = context.job_queue
 
@@ -918,6 +932,7 @@ async def force_weekly_check(update: Update, context: ContextTypes.DEFAULT_TYPE)
     fake_context_night = type("C", (), {})()
     fake_context_night.job = type("J", (), {})()
     fake_context_night.job.data = "night"
+    fake_context_night.job.name = "manual"
     fake_context_night.bot = context.bot
     fake_context_night.job_queue = context.job_queue
 
@@ -988,8 +1003,8 @@ def main():
     app.add_handler(MessageHandler(filters.Regex(r"^(Да|да|Нет|нет)$"), daily_answer_handler), group=2)
 
     # weekly jobs (Sunday only)
-    app.job_queue.run_daily(daily_ask_driver, time=parse_time(DAY_SHIFT_TIME), days=(6,), data="day")
-    app.job_queue.run_daily(daily_ask_driver, time=parse_time(NIGHT_SHIFT_TIME), days=(6,), data="night")
+    app.job_queue.run_daily(daily_ask_driver, time=parse_time(DAY_SHIFT_TIME), days=(6,), data="day", name="weekly_day")
+    app.job_queue.run_daily(daily_ask_driver, time=parse_time(NIGHT_SHIFT_TIME), days=(6,), data="night", name="weekly_night")
 
 
     print("Bot started.")
