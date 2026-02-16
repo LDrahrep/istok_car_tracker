@@ -88,11 +88,11 @@ def main():
     add_driver_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{Buttons.ADD}$"), handlers.add_driver_start)],
         states={
-            ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.add_driver_name)],
-            CONFIRM_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.confirm_phone)],
-            ADD_SHIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.add_driver_shift)],
-            ADD_CAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.add_driver_car)],
-            ADD_PLATES: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.add_driver_plates)],
+            ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{Buttons.CANCEL}$"), handlers.add_driver_name)],
+            CONFIRM_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{Buttons.CANCEL}$"), handlers.confirm_phone)],
+            ADD_SHIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{Buttons.CANCEL}$"), handlers.add_driver_shift)],
+            ADD_CAR: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{Buttons.CANCEL}$"), handlers.add_driver_car)],
+            ADD_PLATES: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{Buttons.CANCEL}$"), handlers.add_driver_plates)],
         },
         fallbacks=[MessageHandler(filters.Regex(f"^{Buttons.CANCEL}$"), handlers.cancel_cmd)],
     )
@@ -102,7 +102,7 @@ def main():
     passengers_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{Buttons.PASS}$"), handlers.passengers_start)],
         states={
-            PASS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.passengers_input)]
+            PASS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{Buttons.CANCEL}$"), handlers.passengers_input)]
         },
         fallbacks=[MessageHandler(filters.Regex(f"^{Buttons.CANCEL}$"), handlers.cancel_cmd)],
     )
@@ -112,7 +112,7 @@ def main():
     delete_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{Buttons.DEL}$"), handlers.delete_start)],
         states={
-            DEL_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.delete_input)]
+            DEL_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{Buttons.CANCEL}$"), handlers.delete_input)]
         },
         fallbacks=[MessageHandler(filters.Regex(f"^{Buttons.CANCEL}$"), handlers.cancel_cmd)],
     )
