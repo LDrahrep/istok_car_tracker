@@ -78,11 +78,27 @@ class SheetManager:
         """Get driver by Telegram ID"""
         try:
             sheet = self._get_worksheet(self.config.DRIVERS_SHEET)
-            data = sheet.get_all_records()
+            values = sheet.get_all_values()
             
-            for i, row in enumerate(data, start=2):
-                if str(row.get("telegramID")) == str(tg_id):
-                    return Driver.from_dict(row, row_index=i)
+            if not values or len(values) < 2:
+                return None
+            
+            headers = values[0]
+            col_map = self._build_column_map(headers)
+            
+            tg_col = col_map.get("telegramid")
+            if tg_col is None:
+                logging.error("telegramID column not found in drivers sheet")
+                return None
+            
+            for i, row in enumerate(values[1:], start=2):
+                if tg_col < len(row) and str(row[tg_col]).strip() == str(tg_id):
+                    # Build dict from row
+                    row_dict = {}
+                    for j, header in enumerate(headers):
+                        if j < len(row):
+                            row_dict[header] = row[j]
+                    return Driver.from_dict(row_dict, row_index=i)
             
             return None
         except Exception as e:
@@ -161,12 +177,24 @@ class SheetManager:
         """Get employee by name"""
         try:
             sheet = self._get_worksheet(self.config.EMPLOYEES_SHEET)
-            data = sheet.get_all_records()
+            values = sheet.get_all_values()
             
+            if not values or len(values) < 2:
+                return None
+            
+            headers = values[0]
             name_norm = normalize_text(name)
-            for i, row in enumerate(data, start=2):
-                if normalize_text(row.get("Employee", "")) == name_norm:
-                    return Employee.from_dict(row, row_index=i)
+            
+            for i, row in enumerate(values[1:], start=2):
+                if len(row) > 0:
+                    employee_name = row[0] if len(row) > 0 else ""
+                    if normalize_text(employee_name) == name_norm:
+                        # Build dict from row
+                        row_dict = {}
+                        for j, header in enumerate(headers):
+                            if j < len(row):
+                                row_dict[header] = row[j]
+                        return Employee.from_dict(row_dict, row_index=i)
             
             return None
         except Exception as e:
@@ -177,8 +205,23 @@ class SheetManager:
         """Get all employees"""
         try:
             sheet = self._get_worksheet(self.config.EMPLOYEES_SHEET)
-            data = sheet.get_all_records()
-            return [Employee.from_dict(row, row_index=i) for i, row in enumerate(data, start=2)]
+            values = sheet.get_all_values()
+            
+            if not values or len(values) < 2:
+                return []
+            
+            headers = values[0]
+            employees = []
+            
+            for i, row in enumerate(values[1:], start=2):
+                # Build dict from row
+                row_dict = {}
+                for j, header in enumerate(headers):
+                    if j < len(row):
+                        row_dict[header] = row[j]
+                employees.append(Employee.from_dict(row_dict, row_index=i))
+            
+            return employees
         except Exception as e:
             logging.error(f"Error getting all employees: {e}")
             raise SheetError(f"Could not retrieve employees: {e}")
@@ -264,11 +307,26 @@ class SheetManager:
         """Get driver's passengers record"""
         try:
             sheet = self._get_worksheet(self.config.DRIVERS_PASSENGERS_SHEET)
-            data = sheet.get_all_records()
+            values = sheet.get_all_values()
             
-            for i, row in enumerate(data, start=2):
-                if str(row.get("TGID")) == str(tg_id):
-                    return DriverPassengers.from_dict(row, row_index=i)
+            if not values or len(values) < 2:
+                return None
+            
+            headers = values[0]
+            col_map = self._build_column_map(headers)
+            
+            tg_col = col_map.get("tgid")
+            if tg_col is None:
+                return None
+            
+            for i, row in enumerate(values[1:], start=2):
+                if tg_col < len(row) and str(row[tg_col]).strip() == str(tg_id):
+                    # Build dict from row
+                    row_dict = {}
+                    for j, header in enumerate(headers):
+                        if j < len(row):
+                            row_dict[header] = row[j]
+                    return DriverPassengers.from_dict(row_dict, row_index=i)
             
             return None
         except Exception as e:
@@ -469,11 +527,22 @@ class SheetManager:
         """Get all drivers for a specific shift"""
         try:
             sheet = self._get_worksheet(self.config.DRIVERS_SHEET)
-            data = sheet.get_all_records()
+            values = sheet.get_all_values()
             
+            if not values or len(values) < 2:
+                return []
+            
+            headers = values[0]
             drivers = []
-            for i, row in enumerate(data, start=2):
-                driver = Driver.from_dict(row, row_index=i)
+            
+            for i, row in enumerate(values[1:], start=2):
+                # Build dict from row
+                row_dict = {}
+                for j, header in enumerate(headers):
+                    if j < len(row):
+                        row_dict[header] = row[j]
+                
+                driver = Driver.from_dict(row_dict, row_index=i)
                 if driver.tg_id and driver.shift == shift:
                     drivers.append(driver)
             
