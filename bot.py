@@ -138,7 +138,7 @@ def main():
     app.job_queue.run_daily(
         handlers.weekly_check,
         time=config.DAY_SHIFT_TIME,
-        days=(6,),  # Sunday = 6
+        days=(0,),  # Sunday = 0 (cron weekday scheme: 0=Sunday, 6=Saturday)
         data="day",
         name="weekly_day"
     )
@@ -146,7 +146,7 @@ def main():
     app.job_queue.run_daily(
         handlers.weekly_check,
         time=config.NIGHT_SHIFT_TIME,
-        days=(6,),  # Sunday = 6
+        days=(0,),  # Sunday = 0 (cron weekday scheme: 0=Sunday, 6=Saturday)
         data="night",
         name="weekly_night"
     )
