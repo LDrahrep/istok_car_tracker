@@ -277,7 +277,7 @@ class BotHandlers:
             await update.message.reply_text(
                 f"Напиши имена пассажиров НА АНГЛИЙСКОМ (до {self.config.MAX_PASSENGERS}), "
                 f"каждого с новой строки:\n\n"
-                "Ivan Ivanov\nPetr Petrov",
+                "ПРИМЕР:\nIvan Ivanov\nPetr Petrov",
                 reply_markup=ReplyKeyboardRemove()
             )
             return PASS_INPUT
