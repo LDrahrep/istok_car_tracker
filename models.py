@@ -81,7 +81,7 @@ class Employee:
         driver_tgid = data.get("Driver's TGID", "")
         return cls(
             name=data.get("Employee", "").strip(),
-            phone=data.get("PhoneNumber", "").strip(),
+            phone=data.get("Phone Number", "").strip(),
             shift=ShiftType.from_string(data.get("Shift", "")),
             rides_with=data.get("Rides with", "").strip(),
             driver_tgid=int(driver_tgid) if driver_tgid and str(driver_tgid).strip() else None,
