@@ -4,6 +4,7 @@
 # =========================
 
 import logging
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -246,6 +247,11 @@ def main():
     print(f"State file: {config.STATE_FILE}")
     print("=" * 50)
     
+    # Wait for any previous instance to fully shut down
+    logging.info("Waiting 10 seconds for any previous instance to shut down...")
+    time.sleep(10)
+    logging.info("Starting bot polling now...")
+
     # Run the bot
     try:
         app.run_polling(drop_pending_updates=True)
