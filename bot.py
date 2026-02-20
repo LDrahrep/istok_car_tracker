@@ -201,7 +201,6 @@ def main():
     
     # Menu button handlers (group 1 = lower priority)
     app.add_handler(MessageHandler(filters.Regex(f"^{Buttons.MY}$"), handlers.my_driver_cmd), group=1)
-    app.add_handler(MessageHandler(filters.Regex(f"^{Buttons.CANCEL}$"), handlers.cancel_cmd), group=1)
     app.add_handler(MessageHandler(filters.Regex(f"^{Buttons.SHUTDOWN}$"), handlers.shutdown_cmd), group=1)
     app.add_handler(MessageHandler(filters.Regex(f"^{Buttons.FORCE_WEEKLY}$"), handlers.force_weekly_check), group=1)
     
