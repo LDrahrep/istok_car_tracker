@@ -81,11 +81,28 @@ class BotConfig:
 
 def load_config() -> BotConfig:
     """Load configuration from environment variables"""
-    
+
+    # Validate required environment variables
+    required_vars = {
+        "TELEGRAM_BOT_TOKEN": "Telegram Bot Token",
+        "SPREADSHEET_ID": "Google Spreadsheet ID",
+    }
+
+    missing = []
+    for var, description in required_vars.items():
+        if not os.environ.get(var):
+            missing.append(f"{var} ({description})")
+
+    if missing:
+        raise ValueError(
+            "Missing required environment variables:\n"
+            + "\n".join(f"  - {m}" for m in missing)
+        )
+
     # Parse admin users from comma-separated string
     admin_ids_str = os.environ.get("ADMIN_USER_IDS", "1270793968")
     admin_users = set(int(uid.strip()) for uid in admin_ids_str.split(",") if uid.strip())
-    
+
     return BotConfig(
         TIMEZONE="America/Chicago",
         DAY_SHIFT_TIME="07:00",

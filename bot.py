@@ -12,6 +12,7 @@ from telegram.ext import (
     CommandHandler,
     ConversationHandler,
     MessageHandler,
+    ContextTypes,
     filters,
 )
 
@@ -20,6 +21,9 @@ from models import ShiftType
 from sheets import SheetManager
 from handlers import BotHandlers, ADD_NAME, CONFIRM_PHONE, ADD_SHIFT, ADD_CAR, ADD_PLATES, PASS_INPUT, DEL_INPUT
 from persistence import init_state_manager
+
+
+logger = logging.getLogger(__name__)
 
 
 # =========================
@@ -64,6 +68,10 @@ def main():
     logging.info("Bot handlers initialized")
     
     # Create application
+    async def post_init(application: Application) -> None:
+        """Delete any active webhook to avoid conflicts with polling"""
+        await application.bot.delete_webhook(drop_pending_updates=True)
+
     app = (
         Application.builder()
         .token(config.BOT_TOKEN)
@@ -71,6 +79,7 @@ def main():
         .read_timeout(60)
         .write_timeout(60)
         .pool_timeout(60)
+        .post_init(post_init)
         .build()
     )
     
@@ -78,6 +87,21 @@ def main():
     # REGISTER HANDLERS
     # =========================
     
+    # Global error handler
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Log errors and notify user"""
+        logger.error(f"Exception while handling an update: {context.error}")
+
+        if update and hasattr(update, 'effective_message') and update.effective_message:
+            try:
+                await update.effective_message.reply_text(
+                    "❌ Произошла ошибка. Попробуйте позже или свяжитесь с администратором."
+                )
+            except Exception:
+                pass
+
+    app.add_error_handler(error_handler)
+
     # Basic commands
     app.add_handler(CommandHandler("start", handlers.start_cmd))
     app.add_handler(CommandHandler("shutdown", handlers.shutdown_cmd))
@@ -194,7 +218,7 @@ def main():
     app.job_queue.run_daily(
         handlers.weekly_check,
         time=config.DAY_SHIFT_TIME,
-        days=(0,),  # Sunday = 0 (cron weekday scheme: 0=Sunday, 6=Saturday)
+        days=(6,),  # Sunday = 6 in ISO format (0=Monday, 6=Sunday)
         data="day",
         name="weekly_day"
     )
@@ -202,7 +226,7 @@ def main():
     app.job_queue.run_daily(
         handlers.weekly_check,
         time=config.NIGHT_SHIFT_TIME,
-        days=(0,),  # Sunday = 0 (cron weekday scheme: 0=Sunday, 6=Saturday)
+        days=(6,),  # Sunday = 6 in ISO format (0=Monday, 6=Sunday)
         data="night",
         name="weekly_night"
     )
@@ -223,7 +247,15 @@ def main():
     print("=" * 50)
     
     # Run the bot
-    app.run_polling(drop_pending_updates=True)
+    try:
+        app.run_polling(drop_pending_updates=True)
+    except KeyboardInterrupt:
+        logging.info("Bot stopped by user (Ctrl+C)")
+    except Exception as e:
+        logging.error(f"Critical error: {e}")
+        raise
+    finally:
+        logging.info("Bot shutdown complete")
 
 
 if __name__ == "__main__":
