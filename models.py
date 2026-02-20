@@ -7,6 +7,22 @@ from typing import Optional, List
 from enum import Enum
 
 
+def parse_int_safe(value, default: int = 0) -> int:
+    """
+    Safe int parser for Google Sheets cells.
+    Handles '', None, whitespace; does not throw.
+    """
+    if value is None:
+        return default
+    s = str(value).strip()
+    if not s:
+        return default
+    try:
+        return int(s)
+    except ValueError:
+        return default
+
+
 class ShiftType(Enum):
     """Shift types"""
     DAY = "day"
@@ -55,8 +71,9 @@ class Driver:
         """Create Driver from sheet row dict"""
         return cls(
             name=data.get("Name", "").strip(),
-            tg_id=int(data.get("telegramID", 0)),
-            phone=data.get("Phone number", "").strip(),
+            tg_id=parse_int_safe(data.get("telegramID"), default=0),
+            # Your sheet uses "Phone Number" (capital N), but keep fallback for old header too:
+            phone=(data.get("Phone Number", "") or data.get("Phone number", "")).strip(),
             shift=ShiftType.from_string(data.get("Shift", "")),
             car=data.get("Car", "").strip(),
             plates=data.get("Plates", "").strip(),
@@ -78,13 +95,16 @@ class Employee:
     @classmethod
     def from_dict(cls, data: dict, row_index: Optional[int] = None) -> 'Employee':
         """Create Employee from sheet row dict"""
-        driver_tgid = data.get("Driver's TGID", "")
+        # Your screenshot shows employees sheet uses "telegramID"
+        driver_tgid_raw = data.get("telegramID", "")
+        driver_tgid = parse_int_safe(driver_tgid_raw, default=0) or None
+
         return cls(
             name=data.get("Employee", "").strip(),
-            phone=data.get("Phone Number", "").strip(),
+            phone=(data.get("Phone Number", "") or data.get("PhoneNumber", "")).strip(),
             shift=ShiftType.from_string(data.get("Shift", "")),
             rides_with=data.get("Rides with", "").strip(),
-            driver_tgid=int(driver_tgid) if driver_tgid and str(driver_tgid).strip() else None,
+            driver_tgid=driver_tgid,
             row_index=row_index,
         )
 
@@ -110,10 +130,11 @@ class DriverPassengers:
         ]
         passengers = [p for p in passengers if p]
         
+        # Your drivers_passengers sheet uses telegramID, not TGID
         return cls(
             driver_name=data.get("Name", "").strip(),
-            driver_tgid=int(data.get("TGID", 0)),
-            phone=data.get("Phone Number", "").strip(),
+            driver_tgid=parse_int_safe(data.get("telegramID"), default=0),
+            phone=(data.get("Phone Number", "") or data.get("Phone number", "")).strip(),
             shift=ShiftType.from_string(data.get("Shift", "")),
             passengers=passengers,
             row_index=row_index,
