@@ -213,7 +213,7 @@ def main():
     # =========================
     # SCHEDULE WEEKLY JOBS
     # =========================
-    
+    # i luv sabina (just redeploy string)
     # Weekly check on Sundays
     app.job_queue.run_daily(
         handlers.weekly_check,
