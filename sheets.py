@@ -228,8 +228,9 @@ class SheetManager:
             logging.error(f"Error getting all employees: {e}")
             raise SheetError(f"Could not retrieve employees: {e}")
 
-    def update_employee_driver(self, employee_name: str, driver_name: str, driver_tgid: int):
-        """Update employee's driver assignment (columns D and E only)"""
+    def update_employee_driver(self, employee_name: str, driver_name: str, driver_tgid: int) -> dict:
+        """Update employee's driver assignment (columns D and E only).
+        Returns a dict with 'success' key and optional 'error'/'message' keys."""
         try:
             sheet = self._get_worksheet(self.config.EMPLOYEES_SHEET)
             employee = self.get_employee_by_name(employee_name)
@@ -239,7 +240,7 @@ class SheetManager:
                 # Create new employee row
                 sheet.append_row([employee_name, "", "", driver_name, str(driver_tgid)])
                 self._invalidate_cache(self.config.EMPLOYEES_SHEET)
-                return
+                return {'success': True}
 
             # Batch update columns D and E
             updates = [
@@ -254,10 +255,28 @@ class SheetManager:
             ]
             sheet.batch_update(updates, value_input_option='USER_ENTERED')
             self._invalidate_cache(self.config.EMPLOYEES_SHEET)
+            return {'success': True}
 
         except Exception as e:
-            logging.error(f"Error updating employee driver for {employee_name}: {e}")
-            raise SheetError(f"Could not update employee: {e}")
+            error_info = e.args[0] if e.args and isinstance(e.args[0], dict) else {}
+
+            # Check for protected cell error
+            if error_info.get('code') == 400:
+                if 'protected cell' in error_info.get('message', '').lower():
+                    logging.error(
+                        f"Permission error: Sheet is protected. Cannot update employee {employee_name}: {error_info}"
+                    )
+                    return {
+                        'success': False,
+                        'error': 'sheet_protected',
+                        'message': (
+                            "Google Sheet has protected cells. Please contact admin to remove "
+                            "protection from columns D and E in the \"employees\" sheet."
+                        ),
+                    }
+
+            logging.error(f"Error updating employee driver for {employee_name}: {error_info}")
+            return {'success': False, 'error': 'unknown', 'message': str(e)}
 
     def clear_employee_driver(self, employee_name: str, only_if_driver_tgid: Optional[int] = None):
         """Clear employee's driver assignment"""

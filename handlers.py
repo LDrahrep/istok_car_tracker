@@ -246,7 +246,19 @@ class BotHandlers:
             is_new, _ = self.sheets.upsert_driver(driver)
             
             # Update employee record (self-assignment)
-            self.sheets.update_employee_driver(driver.name, driver.name, driver.tg_id)
+            result = self.sheets.update_employee_driver(driver.name, driver.name, driver.tg_id)
+            if not result.get('success'):
+                if result.get('error') == 'sheet_protected':
+                    await update.message.reply_text(
+                        "⚠️ Не могу обновить данные: таблица защищена от редактирования.\n"
+                        "Свяжитесь с администратором для снятия защиты с листа 'employees'."
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"❌ Ошибка при обновлении: {result.get('message', 'Unknown error')}"
+                    )
+                await self.show_menu(update, context)
+                return ConversationHandler.END
             
             if is_new:
                 await update.message.reply_text("✅ Водитель добавлен")
@@ -356,10 +368,34 @@ class BotHandlers:
             
             # Update employees table
             for name in unique_names:
-                self.sheets.update_employee_driver(name, driver.name, driver.tg_id)
+                result = self.sheets.update_employee_driver(name, driver.name, driver.tg_id)
+                if not result.get('success'):
+                    if result.get('error') == 'sheet_protected':
+                        await update.message.reply_text(
+                            "⚠️ Не могу обновить данные: таблица защищена от редактирования.\n"
+                            "Свяжитесь с администратором для снятия защиты с листа 'employees'."
+                        )
+                    else:
+                        await update.message.reply_text(
+                            f"❌ Ошибка при обновлении: {result.get('message', 'Unknown error')}"
+                        )
+                    await self.show_menu(update, context)
+                    return ConversationHandler.END
             
             # Driver self-assignment
-            self.sheets.update_employee_driver(driver.name, driver.name, driver.tg_id)
+            result = self.sheets.update_employee_driver(driver.name, driver.name, driver.tg_id)
+            if not result.get('success'):
+                if result.get('error') == 'sheet_protected':
+                    await update.message.reply_text(
+                        "⚠️ Не могу обновить данные: таблица защищена от редактирования.\n"
+                        "Свяжитесь с администратором для снятия защиты с листа 'employees'."
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"❌ Ошибка при обновлении: {result.get('message', 'Unknown error')}"
+                    )
+                await self.show_menu(update, context)
+                return ConversationHandler.END
             
             await update.message.reply_text("✅ Пассажиры добавлены.")
             logging.info(f"Passengers updated for driver {driver.name} (TG:{driver.tg_id}): {merged}")
