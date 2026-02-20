@@ -58,9 +58,17 @@ class BotHandlers:
     def _shift_keyboard(self) -> ReplyKeyboardMarkup:
         """Create shift selection keyboard"""
         return ReplyKeyboardMarkup(
-            [[KeyboardButton(Buttons.DAY), KeyboardButton(Buttons.NIGHT)]],
+            [[KeyboardButton(Buttons.DAY), KeyboardButton(Buttons.NIGHT)],
+             [KeyboardButton(Buttons.CANCEL)]],
             resize_keyboard=True,
             one_time_keyboard=True,
+        )
+    
+    def _cancel_keyboard(self) -> ReplyKeyboardMarkup:
+        """Create keyboard with only the cancel button"""
+        return ReplyKeyboardMarkup(
+            [[KeyboardButton(Buttons.CANCEL)]],
+            resize_keyboard=True,
         )
     
     async def show_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -135,7 +143,7 @@ class BotHandlers:
         context.user_data.clear()
         await update.message.reply_text(
             "Введи СВОИ Имя и Фамилию на АНГЛИЙСКОМ ЯЗЫКЕ",
-            reply_markup=ReplyKeyboardRemove()
+            reply_markup=self._cancel_keyboard()
         )
         return ADD_NAME
     
@@ -208,7 +216,7 @@ class BotHandlers:
         
         await update.message.reply_text(
             "На какой машине ты ездишь? Напиши:",
-            reply_markup=ReplyKeyboardRemove()
+            reply_markup=self._cancel_keyboard()
         )
         return ADD_CAR
     
@@ -290,7 +298,7 @@ class BotHandlers:
                 f"Напиши имена пассажиров НА АНГЛИЙСКОМ (до {self.config.MAX_PASSENGERS}), "
                 f"каждого с новой строки:\n\n"
                 "ПРИМЕР:\nIvan Ivanov\nPetr Petrov",
-                reply_markup=ReplyKeyboardRemove()
+                reply_markup=self._cancel_keyboard()
             )
             return PASS_INPUT
             
@@ -431,7 +439,7 @@ class BotHandlers:
                 "Ваши пассажиры:\n" +
                 "\n".join([f"- {p}" for p in dp.passengers]) +
                 "\n\nВведите имя пассажира для удаления:",
-                reply_markup=ReplyKeyboardRemove()
+                reply_markup=self._cancel_keyboard()
             )
             return DEL_INPUT
             
