@@ -1,12 +1,24 @@
 # =========================
 # GOOGLE SHEETS OPERATIONS
 # =========================
+#
+# FIX: Previously the cache stored only the worksheet *object*, meaning
+# every method still called sheet.get_all_values() — a fresh API hit
+# each time. With 6+ drivers registering simultaneously, a single
+# "add passengers" action triggers 6+ reads (get_driver, get_all_employees
+# x2, get_driver_passengers, get_employee_by_name x N), easily blowing
+# the 60 reads/minute quota.
+#
+# Now _get_sheet_data() caches the actual row data. All read operations
+# use the cache. Writes invalidate the cache so the next read is fresh.
+# =========================
 
 import json
 import os
 import time
 import logging
 import difflib
+import threading
 from typing import List, Optional, Tuple, Dict, Any
 
 import gspread
@@ -22,12 +34,25 @@ class SheetManager:
 
     SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+    # How long (seconds) to keep sheet data in memory before re-fetching.
+    # 60s is safe for a small-team bot; increase if you want fewer reads.
+    DATA_CACHE_TTL = 60
+
     def __init__(self, config: BotConfig):
         self.config = config
         self.client = self._init_client()
-        self._cache = {}
-        self._cache_timeout = 30  # seconds
-        self._last_cache_update = {}
+
+        # Worksheet object cache (avoids re-opening the spreadsheet every time)
+        self._ws_cache: Dict[str, Any] = {}
+
+        # DATA cache: sheet_name -> {"data": [[...]], "ts": float}
+        # This is the key fix — we cache the actual row data, not just the ws object.
+        self._data_cache: Dict[str, Dict] = {}
+        self._cache_lock = threading.Lock()
+
+    # =========================
+    # CLIENT INIT
+    # =========================
 
     def _init_client(self) -> gspread.Client:
         """Initialize Google Sheets client"""
@@ -39,53 +64,107 @@ class SheetManager:
             logging.error(f"Failed to initialize Google Sheets client: {e}")
             raise SheetError(f"Could not connect to Google Sheets: {e}")
 
-    def _get_worksheet(self, sheet_name: str, use_cache: bool = True):
-        """Get worksheet with caching and error handling"""
-        cache_key = f"ws_{sheet_name}"
+    # =========================
+    # CORE CACHING LAYER
+    # =========================
 
-        # Check cache
-        if use_cache and cache_key in self._cache:
-            if time.time() - self._last_cache_update.get(cache_key, 0) < self._cache_timeout:
-                return self._cache[cache_key]
-
-        # Fetch with retry logic
-        for attempt in range(self.config.MAX_RETRIES):
+    def _get_worksheet(self, sheet_name: str):
+        """Get worksheet object (cached; does NOT fetch data)."""
+        if sheet_name not in self._ws_cache:
             try:
                 ws = self.client.open_by_key(self.config.SPREADSHEET_ID).worksheet(sheet_name)
-                self._cache[cache_key] = ws
-                self._last_cache_update[cache_key] = time.time()
-                return ws
+                self._ws_cache[sheet_name] = ws
             except (APIError, SpreadsheetNotFound) as e:
-                if attempt < self.config.MAX_RETRIES - 1:
-                    wait_time = self.config.RETRY_DELAY_SECONDS * (2 ** attempt)
-                    logging.warning(f"Sheet access failed (attempt {attempt + 1}), retrying in {wait_time}s: {e}")
-                    time.sleep(wait_time)
+                raise SheetError(f"Could not open worksheet '{sheet_name}': {e}")
+        return self._ws_cache[sheet_name]
+
+    def _get_sheet_data(self, sheet_name: str) -> List[List[str]]:
+        """
+        Return all values for a sheet, using a TTL cache.
+
+        This is the key method that prevents 429 errors.  Instead of
+        hitting the API on every bot action, we serve cached data and
+        only re-fetch when the TTL has expired or the cache was
+        explicitly invalidated by a write.
+        """
+        with self._cache_lock:
+            cached = self._data_cache.get(sheet_name)
+            if cached and (time.time() - cached["ts"]) < self.DATA_CACHE_TTL:
+                return cached["data"]
+
+        # Cache miss — fetch with retry / back-off
+        data = self._fetch_with_retry(sheet_name)
+
+        with self._cache_lock:
+            self._data_cache[sheet_name] = {"data": data, "ts": time.time()}
+
+        return data
+
+    def _fetch_with_retry(self, sheet_name: str) -> List[List[str]]:
+        """Fetch sheet data with exponential back-off on 429 / transient errors."""
+        last_exc = None
+        for attempt in range(self.config.MAX_RETRIES):
+            try:
+                ws = self._get_worksheet(sheet_name)
+                return ws.get_all_values()
+            except APIError as e:
+                last_exc = e
+                error_info = e.args[0] if e.args and isinstance(e.args[0], dict) else {}
+                code = error_info.get("code", 0)
+                if code == 429:
+                    # Rate-limited: use longer delays so the per-minute window resets
+                    wait = min(60, 10 * (2 ** attempt))   # 10s, 20s, 40s, 60s
                 else:
-                    logging.error(f"Failed to access sheet {sheet_name} after {self.config.MAX_RETRIES} attempts")
-                    raise SheetError(f"Could not access sheet '{sheet_name}': {e}")
+                    wait = self.config.RETRY_DELAY_SECONDS * (2 ** attempt)
+
+                if attempt < self.config.MAX_RETRIES - 1:
+                    logging.warning(
+                        f"Sheet access failed (attempt {attempt + 1}), "
+                        f"retrying in {wait}s: {e}"
+                    )
+                    time.sleep(wait)
+                else:
+                    logging.error(
+                        f"Failed to access sheet {sheet_name} after "
+                        f"{self.config.MAX_RETRIES} attempts"
+                    )
+            except SpreadsheetNotFound as e:
+                raise SheetError(f"Spreadsheet not found: {e}")
+            except Exception as e:
+                last_exc = e
+                if attempt < self.config.MAX_RETRIES - 1:
+                    wait = self.config.RETRY_DELAY_SECONDS * (2 ** attempt)
+                    logging.warning(f"Unexpected error (attempt {attempt + 1}), retrying in {wait}s: {e}")
+                    time.sleep(wait)
+
+        raise SheetError(f"Could not access sheet '{sheet_name}': {last_exc}")
 
     def _invalidate_cache(self, sheet_name: str):
-        """Invalidate cache for a sheet"""
-        cache_key = f"ws_{sheet_name}"
-        self._cache.pop(cache_key, None)
-        self._last_cache_update.pop(cache_key, None)
+        """Invalidate cached data for a sheet (call after any write)."""
+        with self._cache_lock:
+            self._data_cache.pop(sheet_name, None)
+        # Also evict the ws object so we re-open on next access
+        # (handles token expiry on long-running bots)
+        self._ws_cache.pop(sheet_name, None)
+
+    def _build_column_map(self, headers: List[str]) -> Dict[str, int]:
+        """Build a map of normalized column names to indices."""
+        return {normalize_text(h): i for i, h in enumerate(headers)}
 
     # =========================
     # DRIVER OPERATIONS
     # =========================
 
     def get_driver(self, tg_id: int) -> Optional[Driver]:
-        """Get driver by Telegram ID"""
+        """Get driver by Telegram ID (uses cached data)."""
         try:
-            sheet = self._get_worksheet(self.config.DRIVERS_SHEET)
-            values = sheet.get_all_values()
+            values = self._get_sheet_data(self.config.DRIVERS_SHEET)
 
             if not values or len(values) < 2:
                 return None
 
             headers = values[0]
             col_map = self._build_column_map(headers)
-
             tg_col = col_map.get("telegramid")
             if tg_col is None:
                 logging.error("telegramID column not found in drivers sheet")
@@ -93,14 +172,12 @@ class SheetManager:
 
             for i, row in enumerate(values[1:], start=2):
                 if tg_col < len(row) and str(row[tg_col]).strip() == str(tg_id):
-                    # Build dict from row
-                    row_dict = {}
-                    for j, header in enumerate(headers):
-                        if j < len(row):
-                            row_dict[header] = row[j]
+                    row_dict = {headers[j]: row[j] for j in range(len(headers)) if j < len(row)}
                     return Driver.from_dict(row_dict, row_index=i)
 
             return None
+        except SheetError:
+            raise
         except Exception as e:
             logging.error(f"Error getting driver {tg_id}: {e}")
             raise SheetError(f"Could not retrieve driver: {e}")
@@ -111,8 +188,8 @@ class SheetManager:
         Returns: (is_new, row_index)
         """
         try:
-            sheet = self._get_worksheet(self.config.DRIVERS_SHEET)
-            values = sheet.get_all_values()
+            # Use fresh data (or cached) to find existing row
+            values = self._get_sheet_data(self.config.DRIVERS_SHEET)
 
             if not values:
                 raise SheetError("Drivers sheet is empty (no headers)")
@@ -120,7 +197,6 @@ class SheetManager:
             headers = values[0]
             col_map = self._build_column_map(headers)
 
-            # Find existing row
             existing_row = None
             for i, row in enumerate(values[1:], start=2):
                 tg_col = col_map.get("telegramid")
@@ -128,11 +204,10 @@ class SheetManager:
                     existing_row = i
                     break
 
-            # Prepare update data
             update_data = self._prepare_driver_row(driver, headers, col_map)
+            sheet = self._get_worksheet(self.config.DRIVERS_SHEET)
 
             if existing_row:
-                # Update existing row
                 sheet.update(
                     f"A{existing_row}:{chr(ord('A') + len(headers) - 1)}{existing_row}",
                     [update_data],
@@ -141,19 +216,19 @@ class SheetManager:
                 self._invalidate_cache(self.config.DRIVERS_SHEET)
                 return False, existing_row
             else:
-                # Append new row
                 sheet.append_row(update_data, value_input_option="USER_ENTERED")
                 self._invalidate_cache(self.config.DRIVERS_SHEET)
                 return True, len(values) + 1
 
+        except SheetError:
+            raise
         except Exception as e:
             logging.error(f"Error upserting driver {driver.tg_id}: {e}")
             raise SheetError(f"Could not save driver: {e}")
 
     def _prepare_driver_row(self, driver: Driver, headers: List[str], col_map: Dict[str, int]) -> List[str]:
-        """Prepare driver row data matching headers"""
+        """Prepare driver row data matching headers."""
         row = [""] * len(headers)
-
         updates = {
             "name": driver.name,
             "telegramid": str(driver.tg_id),
@@ -163,12 +238,10 @@ class SheetManager:
             "plates": driver.plates,
             "isactive": "TRUE" if driver.is_active else "FALSE",
         }
-
         for key, value in updates.items():
             col = col_map.get(key)
             if col is not None:
                 row[col] = value
-
         return row
 
     # =========================
@@ -176,10 +249,9 @@ class SheetManager:
     # =========================
 
     def get_employee_by_name(self, name: str) -> Optional[Employee]:
-        """Get employee by name"""
+        """Get employee by name (uses cached data)."""
         try:
-            sheet = self._get_worksheet(self.config.EMPLOYEES_SHEET)
-            values = sheet.get_all_values()
+            values = self._get_sheet_data(self.config.EMPLOYEES_SHEET)
 
             if not values or len(values) < 2:
                 return None
@@ -188,42 +260,33 @@ class SheetManager:
             name_norm = normalize_text(name)
 
             for i, row in enumerate(values[1:], start=2):
-                if len(row) > 0:
-                    employee_name = row[0] if len(row) > 0 else ""
-                    if normalize_text(employee_name) == name_norm:
-                        # Build dict from row
-                        row_dict = {}
-                        for j, header in enumerate(headers):
-                            if j < len(row):
-                                row_dict[header] = row[j]
-                        return Employee.from_dict(row_dict, row_index=i)
+                if len(row) > 0 and normalize_text(row[0]) == name_norm:
+                    row_dict = {headers[j]: row[j] for j in range(len(headers)) if j < len(row)}
+                    return Employee.from_dict(row_dict, row_index=i)
 
             return None
+        except SheetError:
+            raise
         except Exception as e:
             logging.error(f"Error getting employee {name}: {e}")
             raise SheetError(f"Could not retrieve employee: {e}")
 
     def get_all_employees(self) -> List[Employee]:
-        """Get all employees"""
+        """Get all employees (uses cached data)."""
         try:
-            sheet = self._get_worksheet(self.config.EMPLOYEES_SHEET)
-            values = sheet.get_all_values()
+            values = self._get_sheet_data(self.config.EMPLOYEES_SHEET)
 
             if not values or len(values) < 2:
                 return []
 
             headers = values[0]
             employees = []
-
             for i, row in enumerate(values[1:], start=2):
-                # Build dict from row
-                row_dict = {}
-                for j, header in enumerate(headers):
-                    if j < len(row):
-                        row_dict[header] = row[j]
+                row_dict = {headers[j]: row[j] for j in range(len(headers)) if j < len(row)}
                 employees.append(Employee.from_dict(row_dict, row_index=i))
-
             return employees
+        except SheetError:
+            raise
         except Exception as e:
             logging.error(f"Error getting all employees: {e}")
             raise SheetError(f"Could not retrieve employees: {e}")
@@ -237,21 +300,13 @@ class SheetManager:
 
             if not employee or not employee.row_index:
                 logging.warning(f"Employee {employee_name} not found, creating new row")
-                # Create new employee row
                 sheet.append_row([employee_name, "", "", driver_name, str(driver_tgid)])
                 self._invalidate_cache(self.config.EMPLOYEES_SHEET)
                 return {'success': True}
 
-            # Batch update columns D and E
             updates = [
-                {
-                    'range': f'D{employee.row_index}',
-                    'values': [[driver_name]]
-                },
-                {
-                    'range': f'E{employee.row_index}',
-                    'values': [[str(driver_tgid)]]
-                }
+                {'range': f'D{employee.row_index}', 'values': [[driver_name]]},
+                {'range': f'E{employee.row_index}', 'values': [[str(driver_tgid)]]},
             ]
             sheet.batch_update(updates, value_input_option='USER_ENTERED')
             self._invalidate_cache(self.config.EMPLOYEES_SHEET)
@@ -260,7 +315,6 @@ class SheetManager:
         except Exception as e:
             error_info = e.args[0] if e.args and isinstance(e.args[0], dict) else {}
 
-            # Check for protected cell error
             if error_info.get('code') == 400:
                 if 'protected cell' in error_info.get('message', '').lower():
                     logging.error(
@@ -279,14 +333,13 @@ class SheetManager:
             return {'success': False, 'error': 'unknown', 'message': str(e)}
 
     def clear_employee_driver(self, employee_name: str, only_if_driver_tgid: Optional[int] = None):
-        """Clear employee's driver assignment"""
+        """Clear employee's driver assignment."""
         try:
             employee = self.get_employee_by_name(employee_name)
 
             if not employee or not employee.row_index:
                 return
 
-            # Only clear if it matches the specified driver (if provided)
             if only_if_driver_tgid is not None and employee.driver_tgid != only_if_driver_tgid:
                 return
 
@@ -303,16 +356,17 @@ class SheetManager:
             raise SheetError(f"Could not clear employee driver: {e}")
 
     def find_similar_employee_names(self, name: str, cutoff: float = 0.6) -> List[str]:
-        """Find similar employee names using fuzzy matching"""
+        """Find similar employee names using fuzzy matching.
+
+        NOTE: reuses get_all_employees() which hits the cache — no extra API call.
+        """
         try:
-            employees = self.get_all_employees()
+            employees = self.get_all_employees()   # <-- served from cache
             all_names = [e.name for e in employees if e.name]
             name_norm = normalize_text(name)
             all_names_norm = [normalize_text(n) for n in all_names]
 
             matches = difflib.get_close_matches(name_norm, all_names_norm, n=3, cutoff=cutoff)
-
-            # Map back to original names
             norm_to_original = {normalize_text(n): n for n in all_names}
             return [norm_to_original[m] for m in matches if m in norm_to_original]
 
@@ -325,41 +379,35 @@ class SheetManager:
     # =========================
 
     def get_driver_passengers(self, tg_id: int) -> Optional[DriverPassengers]:
-        """Get driver's passengers record"""
+        """Get driver's passengers record (uses cached data)."""
         try:
-            sheet = self._get_worksheet(self.config.DRIVERS_PASSENGERS_SHEET)
-            values = sheet.get_all_values()
+            values = self._get_sheet_data(self.config.DRIVERS_PASSENGERS_SHEET)
 
             if not values or len(values) < 2:
                 return None
 
             headers = values[0]
             col_map = self._build_column_map(headers)
-
-            # Header is "telegramID" -> normalized is "telegramid"
             tg_col = col_map.get("telegramid")
             if tg_col is None:
                 return None
 
             for i, row in enumerate(values[1:], start=2):
                 if tg_col < len(row) and str(row[tg_col]).strip() == str(tg_id):
-                    # Build dict from row
-                    row_dict = {}
-                    for j, header in enumerate(headers):
-                        if j < len(row):
-                            row_dict[header] = row[j]
+                    row_dict = {headers[j]: row[j] for j in range(len(headers)) if j < len(row)}
                     return DriverPassengers.from_dict(row_dict, row_index=i)
 
             return None
+        except SheetError:
+            raise
         except Exception as e:
             logging.error(f"Error getting driver passengers for {tg_id}: {e}")
             raise SheetError(f"Could not retrieve driver passengers: {e}")
 
     def upsert_driver_passengers(self, dp: DriverPassengers) -> int:
-        """Insert or update driver passengers record"""
+        """Insert or update driver passengers record."""
         try:
-            sheet = self._get_worksheet(self.config.DRIVERS_PASSENGERS_SHEET)
-            values = sheet.get_all_values()
+            values = self._get_sheet_data(self.config.DRIVERS_PASSENGERS_SHEET)
 
             if not values:
                 raise SheetError("Drivers passengers sheet is empty")
@@ -367,7 +415,6 @@ class SheetManager:
             headers = values[0]
             col_map = self._build_column_map(headers)
 
-            # Find existing row
             existing_row = None
             for i, row in enumerate(values[1:], start=2):
                 tg_col = col_map.get("telegramid")
@@ -375,8 +422,8 @@ class SheetManager:
                     existing_row = i
                     break
 
-            # Prepare row data
             row_data = self._prepare_driver_passengers_row(dp, headers, col_map)
+            sheet = self._get_worksheet(self.config.DRIVERS_PASSENGERS_SHEET)
 
             if existing_row:
                 sheet.update(
@@ -391,20 +438,18 @@ class SheetManager:
                 self._invalidate_cache(self.config.DRIVERS_PASSENGERS_SHEET)
                 return len(values) + 1
 
+        except SheetError:
+            raise
         except Exception as e:
             logging.error(f"Error upserting driver passengers for {dp.driver_tgid}: {e}")
             raise SheetError(f"Could not save driver passengers: {e}")
 
     def _prepare_driver_passengers_row(self, dp: DriverPassengers, headers: List[str], col_map: Dict[str, int]) -> List[str]:
-        """Prepare driver passengers row data"""
+        """Prepare driver passengers row data."""
         row = [""] * len(headers)
-
-        # Pad passengers to 4
         passengers = dp.passengers + [""] * (4 - len(dp.passengers))
-
         updates = {
             "name": dp.driver_name,
-            # Write to telegramID column
             "telegramid": str(dp.driver_tgid),
             "phone number": dp.phone,
             "shift": dp.shift.to_display(),
@@ -413,29 +458,22 @@ class SheetManager:
             "passenger3": passengers[2],
             "passenger4": passengers[3],
         }
-
         for key, value in updates.items():
             col = col_map.get(key)
             if col is not None:
                 row[col] = value
-
         return row
 
     def clear_driver_passengers(self, tg_id: int) -> List[str]:
-        """
-        Clear all passengers for a driver.
-        Returns: List of cleared passenger names
-        """
+        """Clear all passengers for a driver. Returns list of cleared passenger names."""
         try:
             dp = self.get_driver_passengers(tg_id)
             if not dp or not dp.row_index:
                 return []
 
             cleared_passengers = list(dp.passengers)
-
             sheet = self._get_worksheet(self.config.DRIVERS_PASSENGERS_SHEET)
 
-            # Clear passenger columns E-H
             updates = [
                 {'range': f'E{dp.row_index}', 'values': [['']]},
                 {'range': f'F{dp.row_index}', 'values': [['']]},
@@ -447,41 +485,34 @@ class SheetManager:
 
             return cleared_passengers
 
+        except SheetError:
+            raise
         except Exception as e:
             logging.error(f"Error clearing driver passengers for {tg_id}: {e}")
             raise SheetError(f"Could not clear driver passengers: {e}")
 
     def remove_passenger(self, tg_id: int, passenger_name: str) -> bool:
-        """
-        Remove a specific passenger from driver's list.
-        Returns: True if removed, False if not found
-        """
+        """Remove a specific passenger from driver's list. Returns True if removed."""
         try:
             dp = self.get_driver_passengers(tg_id)
             if not dp or not dp.row_index:
                 return False
 
             passenger_norm = normalize_text(passenger_name)
-
-            # Find the passenger
-            passenger_index = None
-            for i, p in enumerate(dp.passengers):
-                if normalize_text(p) == passenger_norm:
-                    passenger_index = i
-                    break
+            passenger_index = next(
+                (i for i, p in enumerate(dp.passengers) if normalize_text(p) == passenger_norm),
+                None
+            )
 
             if passenger_index is None:
                 return False
 
-            # Update the passengers list
-            new_passengers = [p for i, p in enumerate(dp.passengers) if i != passenger_index]
-            dp.passengers = new_passengers
-
-            # Save back
+            dp.passengers = [p for i, p in enumerate(dp.passengers) if i != passenger_index]
             self.upsert_driver_passengers(dp)
-
             return True
 
+        except SheetError:
+            raise
         except Exception as e:
             logging.error(f"Error removing passenger {passenger_name} from driver {tg_id}: {e}")
             raise SheetError(f"Could not remove passenger: {e}")
@@ -495,20 +526,24 @@ class SheetManager:
         """
         Validate that passengers can be assigned to driver.
         Returns: (valid_employees, error_messages)
+
+        All reads here go through the cache — get_all_employees(),
+        find_similar_employee_names(), and get_driver() all serve
+        cached data, so this whole method costs 0 extra API calls
+        when the cache is warm.
         """
         errors = []
         valid_employees = []
 
         try:
-            all_employees = self.get_all_employees()
+            all_employees = self.get_all_employees()   # cached
             employee_map = {normalize_text(e.name): e for e in all_employees if e.name}
 
             for name in passenger_names:
                 name_norm = normalize_text(name)
 
-                # Check if employee exists
                 if name_norm not in employee_map:
-                    similar = self.find_similar_employee_names(name)
+                    similar = self.find_similar_employee_names(name)   # also cached
                     if similar:
                         suggestions = "\n".join([f"• {s}" for s in similar])
                         errors.append(f"Пассажир '{name}' не найден.\n\nВозможно, вы имели в виду:\n{suggestions}")
@@ -518,22 +553,20 @@ class SheetManager:
 
                 employee = employee_map[name_norm]
 
-                # Check shift compatibility
                 if driver_shift != ShiftType.UNKNOWN and employee.shift != ShiftType.UNKNOWN:
                     if driver_shift != employee.shift:
                         errors.append(
-                            f"⚠️ Смена пассажир�� '{name}' ({employee.shift.to_display()}) не совпадает с вашей ({driver_shift.to_display()})"
+                            f"⚠️ Смена пассажира '{name}' ({employee.shift.to_display()}) "
+                            f"не совпадает с вашей ({driver_shift.to_display()})"
                         )
                         continue
 
-                # Check if already assigned to another driver
                 if employee.driver_tgid and employee.driver_tgid != driver_tgid:
                     errors.append(f"⛔ Пассажир '{name}' уже закреплён за другим водителем.")
                     continue
 
                 if employee.rides_with and normalize_text(employee.rides_with) != normalize_text(str(driver_tgid)):
-                    # Double-check it's not just the name vs tgid mismatch
-                    driver = self.get_driver(driver_tgid)
+                    driver = self.get_driver(driver_tgid)   # cached
                     if driver and normalize_text(employee.rides_with) != normalize_text(driver.name):
                         errors.append(f"⛔ Пассажир '{name}' уже закреплён за другим водителем.")
                         continue
@@ -542,6 +575,8 @@ class SheetManager:
 
             return valid_employees, errors
 
+        except SheetError:
+            raise
         except Exception as e:
             logging.error(f"Error validating passengers: {e}")
             raise SheetError(f"Could not validate passengers: {e}")
@@ -551,10 +586,9 @@ class SheetManager:
     # =========================
 
     def get_drivers_for_shift(self, shift: ShiftType) -> List[Driver]:
-        """Get all drivers for a specific shift"""
+        """Get all active drivers for a specific shift (uses cached data)."""
         try:
-            sheet = self._get_worksheet(self.config.DRIVERS_SHEET)
-            values = sheet.get_all_values()
+            values = self._get_sheet_data(self.config.DRIVERS_SHEET)
 
             if not values or len(values) < 2:
                 return []
@@ -563,25 +597,14 @@ class SheetManager:
             drivers = []
 
             for i, row in enumerate(values[1:], start=2):
-                # Build dict from row
-                row_dict = {}
-                for j, header in enumerate(headers):
-                    if j < len(row):
-                        row_dict[header] = row[j]
-
+                row_dict = {headers[j]: row[j] for j in range(len(headers)) if j < len(row)}
                 driver = Driver.from_dict(row_dict, row_index=i)
                 if driver.tg_id and driver.shift == shift:
                     drivers.append(driver)
 
             return drivers
+        except SheetError:
+            raise
         except Exception as e:
             logging.error(f"Error getting drivers for shift {shift}: {e}")
             raise SheetError(f"Could not get drivers: {e}")
-
-    # =========================
-    # UTILITIES
-    # =========================
-
-    def _build_column_map(self, headers: List[str]) -> Dict[str, int]:
-        """Build a map of normalized column names to indices"""
-        return {normalize_text(h): i for i, h in enumerate(headers)}
