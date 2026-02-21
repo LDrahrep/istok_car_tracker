@@ -162,63 +162,76 @@ class BotHandlers:
                 )
                 return ConversationHandler.END
             
-            if not employee.phone:
-                await update.message.reply_text(
-                    "Телефон у сотрудника отсутствует. Обратитесь к менеджеру."
-                )
-                return ConversationHandler.END
-            
+            # --- PHONE CHECK TEMPORARILY DISABLED ---
+            # if not employee.phone:
+            #     await update.message.reply_text(
+            #         "Телефон у сотрудника отсутствует. Обратитесь к менеджеру."
+            #     )
+            #     return ConversationHandler.END
+
             context.user_data["phone"] = employee.phone
             context.user_data["shift_from_employees"] = employee.shift.to_display()
-            
+
+            # --- PHONE CONFIRMATION TEMPORARILY DISABLED ---
+            # await update.message.reply_text(
+            #     f"Найден номер: {employee.phone}\nЭто правильный номер?",
+            #     reply_markup=self._yes_no_keyboard(),
+            # )
+            # return CONFIRM_PHONE
+
+            # Use shift from employees sheet directly (shift question also disabled below)
+            context.user_data["shift"] = employee.shift.to_display()
+
             await update.message.reply_text(
-                f"Найден номер: {employee.phone}\nЭто правильный номер?",
-                reply_markup=self._yes_no_keyboard(),
+                "На какой машине ты ездишь? Напиши:",
+                reply_markup=self._cancel_keyboard(),
             )
-            return CONFIRM_PHONE
+            return ADD_CAR
             
         except SheetError as e:
             logging.error(f"Error in add_driver_name: {e}")
             await update.message.reply_text("⚠️ Ошибка доступа к таблице. Попробуйте позже.")
             return ConversationHandler.END
     
-    async def confirm_phone(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle phone confirmation"""
-        answer = update.message.text.strip().lower()
-        
-        if answer != "да":
-            await update.message.reply_text(
-                "Запись не создана. Обратитесь к менеджеру.",
-                reply_markup=ReplyKeyboardRemove(),
-            )
-            await self.show_menu(update, context)
-            return ConversationHandler.END
-        
-        await update.message.reply_text(
-            "В какой смене ты работаешь?",
-            reply_markup=self._shift_keyboard(),
-        )
-        return ADD_SHIFT
-    
-    async def add_driver_shift(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle shift selection"""
-        raw = update.message.text.strip()
-        shift = ShiftType.from_string(raw)
-        
-        if shift == ShiftType.UNKNOWN:
-            await update.message.reply_text(
-                "Пожалуйста, выберите Shift кнопками: Day или Night.",
-                reply_markup=self._shift_keyboard(),
-            )
-            return ADD_SHIFT
-        
-        context.user_data["shift"] = shift.to_display()
-        
-        await update.message.reply_text(
-            "На какой машине ты ездишь? Напиши:",
-            reply_markup=self._cancel_keyboard()
-        )
-        return ADD_CAR
+    # --- CONFIRM PHONE TEMPORARILY DISABLED ---
+    # async def confirm_phone(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    #     """Handle phone confirmation"""
+    #     answer = update.message.text.strip().lower()
+    #
+    #     if answer != "да":
+    #         await update.message.reply_text(
+    #             "Запись не создана. Обратитесь к менеджеру.",
+    #             reply_markup=ReplyKeyboardRemove(),
+    #         )
+    #         await self.show_menu(update, context)
+    #         return ConversationHandler.END
+    #
+    #     await update.message.reply_text(
+    #         "В какой смене ты работаешь?",
+    #         reply_markup=self._shift_keyboard(),
+    #     )
+    #     return ADD_SHIFT
+
+    # --- ADD DRIVER SHIFT TEMPORARILY DISABLED ---
+    # async def add_driver_shift(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    #     """Handle shift selection"""
+    #     raw = update.message.text.strip()
+    #     shift = ShiftType.from_string(raw)
+    #
+    #     if shift == ShiftType.UNKNOWN:
+    #         await update.message.reply_text(
+    #             "Пожалуйста, выберите Shift кнопками: Day или Night.",
+    #             reply_markup=self._shift_keyboard(),
+    #         )
+    #         return ADD_SHIFT
+    #
+    #     context.user_data["shift"] = shift.to_display()
+    #
+    #     await update.message.reply_text(
+    #         "На какой машине ты ездишь? Напиши:",
+    #         reply_markup=self._cancel_keyboard()
+    #     )
+    #     return ADD_CAR
     
     async def add_driver_car(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle car input"""

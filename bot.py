@@ -122,24 +122,26 @@ def main():
                 & ~filters.Regex(f"^{Buttons.MY}$"),
                 handlers.add_driver_name
             )],
-            CONFIRM_PHONE: [MessageHandler(
-                filters.TEXT & ~filters.COMMAND 
-                & ~filters.Regex(f"^{Buttons.CANCEL}$")
-                & ~filters.Regex(f"^{Buttons.ADD}$")
-                & ~filters.Regex(f"^{Buttons.PASS}$")
-                & ~filters.Regex(f"^{Buttons.DEL}$")
-                & ~filters.Regex(f"^{Buttons.MY}$"),
-                handlers.confirm_phone
-            )],
-            ADD_SHIFT: [MessageHandler(
-                filters.TEXT & ~filters.COMMAND 
-                & ~filters.Regex(f"^{Buttons.CANCEL}$")
-                & ~filters.Regex(f"^{Buttons.ADD}$")
-                & ~filters.Regex(f"^{Buttons.PASS}$")
-                & ~filters.Regex(f"^{Buttons.DEL}$")
-                & ~filters.Regex(f"^{Buttons.MY}$"),
-                handlers.add_driver_shift
-            )],
+            # --- CONFIRM_PHONE TEMPORARILY DISABLED ---
+            # CONFIRM_PHONE: [MessageHandler(
+            #     filters.TEXT & ~filters.COMMAND
+            #     & ~filters.Regex(f"^{Buttons.CANCEL}$")
+            #     & ~filters.Regex(f"^{Buttons.ADD}$")
+            #     & ~filters.Regex(f"^{Buttons.PASS}$")
+            #     & ~filters.Regex(f"^{Buttons.DEL}$")
+            #     & ~filters.Regex(f"^{Buttons.MY}$"),
+            #     handlers.confirm_phone
+            # )],
+            # --- ADD_SHIFT TEMPORARILY DISABLED ---
+            # ADD_SHIFT: [MessageHandler(
+            #     filters.TEXT & ~filters.COMMAND
+            #     & ~filters.Regex(f"^{Buttons.CANCEL}$")
+            #     & ~filters.Regex(f"^{Buttons.ADD}$")
+            #     & ~filters.Regex(f"^{Buttons.PASS}$")
+            #     & ~filters.Regex(f"^{Buttons.DEL}$")
+            #     & ~filters.Regex(f"^{Buttons.MY}$"),
+            #     handlers.add_driver_shift
+            # )],
             ADD_CAR: [MessageHandler(
                 filters.TEXT & ~filters.COMMAND 
                 & ~filters.Regex(f"^{Buttons.CANCEL}$")
