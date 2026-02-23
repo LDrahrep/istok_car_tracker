@@ -335,15 +335,24 @@ def main():
     logging.info("Waiting 3 seconds before polling...")
     time.sleep(3)
 
-    try:
-        app.run_polling(drop_pending_updates=True)
-    except KeyboardInterrupt:
-        logging.info("Bot stopped by user (Ctrl+C)")
-    except Exception as e:
-        logging.error(f"Critical error: {e}")
-        raise
-    finally:
-        logging.info("Bot shutdown complete")
+    max_attempts = 10
+    for attempt in range(max_attempts):
+        try:
+            app.run_polling(drop_pending_updates=True)
+            break
+        except KeyboardInterrupt:
+            logging.info("Bot stopped by user (Ctrl+C)")
+            break
+        except Exception as e:
+            if "Conflict" in str(e) and attempt < max_attempts - 1:
+                wait = 15 * (attempt + 1)
+                logging.warning(f"Conflict: old instance still running, waiting {wait}s before retry ({attempt + 1}/{max_attempts})...")
+                time.sleep(wait)
+            else:
+                logging.error(f"Critical error: {e}")
+                raise
+
+    logging.info("Bot shutdown complete")
 
 
 if __name__ == "__main__":
