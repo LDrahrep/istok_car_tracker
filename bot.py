@@ -22,7 +22,7 @@ from models import ShiftType
 from sheets import SheetManager
 from handlers import BotHandlers, ADD_NAME, CONFIRM_PHONE, ADD_SHIFT, ADD_CAR, ADD_PLATES, PASS_INPUT, DEL_INPUT
 from persistence import init_state_manager
-
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,25 @@ def setup_logging():
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("telegram").setLevel(logging.INFO)
 
+def run_weekly_cli(mode: str):
+    setup_logging()
+    logging.info(f"Running weekly CLI mode: {mode}")
 
+    config = load_config()
+    sheets = SheetManager(config)
+    handlers = BotHandlers(config, sheets)
+
+    # создаём fake context без Telegram
+    class DummyContext:
+        application = None
+        job = None
+
+    if mode == "day":
+        handlers.weekly_check(DummyContext(), data="day")
+    elif mode == "night":
+        handlers.weekly_check(DummyContext(), data="night")
+
+    logging.info("Weekly CLI completed")
 # =========================
 # MAIN
 # =========================
@@ -266,4 +284,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    if "--weekly-day" in sys.argv:
+        run_weekly_cli("day")
+    elif "--weekly-night" in sys.argv:
+        run_weekly_cli("night")
+    else:
+        main()
