@@ -200,6 +200,14 @@ def main():
     async def post_init(application: Application) -> None:
         """Delete webhook to avoid conflicts, then start HTTP trigger server."""
         await application.bot.delete_webhook(drop_pending_updates=True)
+        # Force-terminate any other active polling session
+        logger.info("Kicking any existing polling session...")
+        try:
+            await application.bot.get_updates(offset=-1, timeout=0, allowed_updates=[])
+        except Exception as e:
+            logger.warning(f"get_updates kick failed (ok): {e}")
+        await asyncio.sleep(2)
+        logger.info("Polling session kicked, proceeding.")
 
         # start the HTTP server inside event loop context
         start_weekly_trigger_server(
