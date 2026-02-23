@@ -69,7 +69,7 @@ def _already_triggered_today(shift: str, tz_name: str) -> bool:
     return last_local_date == now_local_date
 
 
-def start_weekly_trigger_server(
+def start_combined_server(
     *,
     app: Application,
     handlers: BotHandlers,
@@ -78,28 +78,44 @@ def start_weekly_trigger_server(
     token: str,
 ):
     """
-    Start a tiny HTTP server in a background thread.
+    Start a single HTTP server handling both Telegram webhook and weekly trigger.
 
     Endpoints:
-      GET /health
-      GET /weekly?shift=day|night&token=...
-      GET /weekly/day?token=...
-      GET /weekly/night?token=...
+      POST /telegram          - Telegram webhook updates
+      GET  /health
+      GET  /weekly?shift=day|night&token=...
+      GET  /weekly/day?token=...
+      GET  /weekly/night?token=...
     """
+    import json as _json
+    from telegram import Update
+
     loop = asyncio.get_running_loop()
 
     class Handler(BaseHTTPRequestHandler):
-        def _send(self, code: int, body: str):
+        def _send(self, code: int, body: str, content_type: str = "text/plain; charset=utf-8"):
             body_bytes = body.encode("utf-8")
             self.send_response(code)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body_bytes)))
             self.end_headers()
             self.wfile.write(body_bytes)
 
         def log_message(self, format, *args):
-            # reduce noise
-            logger.info("HTTP %s - %s", self.address_string(), format % args)
+            logger.debug("HTTP %s - %s", self.address_string(), format % args)
+
+        def do_POST(self):
+            parsed = urllib.parse.urlparse(self.path)
+            path = parsed.path.rstrip("/")
+            if path == "/telegram":
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length)
+                async def _process():
+                    update = Update.de_json(_json.loads(body), app.bot)
+                    await app.process_update(update)
+                asyncio.run_coroutine_threadsafe(_process(), loop)
+                return self._send(200, "ok")
+            return self._send(404, "not found")
 
         def do_GET(self):
             parsed = urllib.parse.urlparse(self.path)
@@ -144,10 +160,8 @@ def start_weekly_trigger_server(
 
             fut = asyncio.run_coroutine_threadsafe(_run_weekly(), loop)
             try:
-                # wait a bit to catch immediate errors; not waiting full execution
                 fut.result(timeout=5)
             except asyncio.TimeoutError:
-                # weekly continues in background
                 pass
             except Exception as e:
                 logger.exception("HTTP trigger failed: %s", e)
@@ -158,7 +172,7 @@ def start_weekly_trigger_server(
     server = ThreadingHTTPServer((host, port), Handler)
 
     def _serve():
-        logger.info("Weekly trigger HTTP server listening on %s:%s", host, port)
+        logger.info("Combined HTTP server listening on %s:%s (Telegram webhook + weekly trigger)", host, port)
         try:
             server.serve_forever()
         except Exception as e:
@@ -167,8 +181,7 @@ def start_weekly_trigger_server(
     t = threading.Thread(target=_serve, daemon=True)
     t.start()
 
-    # store for shutdown (optional)
-    app.bot_data["weekly_http_server"] = server
+    app.bot_data["http_server"] = server
 
 
 # =========================
@@ -197,20 +210,19 @@ def main():
     http_host = "0.0.0.0"
     http_port = int(os.environ.get("PORT", "8080"))
 
-    async def post_init(application: Application) -> None:
-        """Delete webhook to avoid conflicts, then start HTTP trigger server."""
-        await application.bot.delete_webhook(drop_pending_updates=True)
-        # Force-terminate any other active polling session
-        logger.info("Kicking any existing polling session...")
-        try:
-            await application.bot.get_updates(offset=-1, timeout=0, allowed_updates=[])
-        except Exception as e:
-            logger.warning(f"get_updates kick failed (ok): {e}")
-        await asyncio.sleep(2)
-        logger.info("Polling session kicked, proceeding.")
+    webhook_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "enchanting-reflection-production.up.railway.app")
+    webhook_url = f"https://{webhook_domain}/telegram"
 
+    async def post_init(application: Application) -> None:
+        """Set webhook, then start HTTP trigger server."""
+        await application.bot.set_webhook(
+            url=webhook_url,
+            drop_pending_updates=True,
+            allowed_updates=["message", "callback_query"],
+        )
+        logger.info(f"Webhook set to: {webhook_url}")
         # start the HTTP server inside event loop context
-        start_weekly_trigger_server(
+        start_combined_server(
             app=application,
             handlers=handlers,
             host=http_host,
@@ -341,11 +353,14 @@ def main():
     print(f"State file: {config.STATE_FILE}")
     print("=" * 50)
 
-    logging.info("Waiting 30 seconds for old instance to shut down...")
-    time.sleep(30)
+    async def run():
+        async with app:
+            await app.start()
+            logger.info("Bot running with webhook mode. Waiting for updates...")
+            await asyncio.Event().wait()  # run forever
 
     try:
-        app.run_polling(drop_pending_updates=True)
+        asyncio.run(run())
     except KeyboardInterrupt:
         logging.info("Bot stopped by user (Ctrl+C)")
     except Exception as e:
