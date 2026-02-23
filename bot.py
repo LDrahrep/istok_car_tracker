@@ -224,10 +224,7 @@ def main():
     # Error handler
     async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(f"Exception while handling an update: {context.error}")
-        if "Conflict" in str(context.error):
-            logger.warning("Conflict detected in error handler, stopping updater to retry...")
-            asyncio.create_task(context.application.updater.stop())
-            return
+
         if update and hasattr(update, 'effective_message') and update.effective_message:
             try:
                 await update.effective_message.reply_text(
@@ -336,27 +333,18 @@ def main():
     print(f"State file: {config.STATE_FILE}")
     print("=" * 50)
 
-    logging.info("Waiting 3 seconds before polling...")
-    time.sleep(3)
+    logging.info("Waiting 30 seconds for old instance to shut down...")
+    time.sleep(30)
 
-    max_attempts = 10
-    for attempt in range(max_attempts):
-        try:
-            app.run_polling(drop_pending_updates=True)
-            break
-        except KeyboardInterrupt:
-            logging.info("Bot stopped by user (Ctrl+C)")
-            break
-        except Exception as e:
-            if "Conflict" in str(e) and attempt < max_attempts - 1:
-                wait = 15 * (attempt + 1)
-                logging.warning(f"Conflict: old instance still running, waiting {wait}s before retry ({attempt + 1}/{max_attempts})...")
-                time.sleep(wait)
-            else:
-                logging.error(f"Critical error: {e}")
-                raise
-
-    logging.info("Bot shutdown complete")
+    try:
+        app.run_polling(drop_pending_updates=True)
+    except KeyboardInterrupt:
+        logging.info("Bot stopped by user (Ctrl+C)")
+    except Exception as e:
+        logging.error(f"Critical error: {e}")
+        raise
+    finally:
+        logging.info("Bot shutdown complete")
 
 
 if __name__ == "__main__":
