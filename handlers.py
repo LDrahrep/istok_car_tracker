@@ -1,677 +1,535 @@
-# =========================
-# TELEGRAM HANDLERS
-# =========================
+from __future__ import annotations
 
-import logging
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-from typing import List
+from datetime import timedelta
+from typing import Optional
 
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
-from config import BotConfig, Buttons
-from models import Driver, Employee, DriverPassengers, ShiftType, normalize_text, SheetError, ValidationError
-from sheets import SheetManager
+from config import Buttons
+from models import Driver, DriverPassengers, ShiftType
 from persistence import get_state_manager
 
 
-# Conversation states
-ADD_NAME, CONFIRM_PHONE, ADD_SHIFT, ADD_CAR, ADD_PLATES = range(5)
-PASS_INPUT = 10
-DEL_INPUT = 20
+(
+    ST_DRIVER_NAME,
+    ST_DRIVER_CAR,
+    ST_DRIVER_PLATES,
+    ST_ADD_PASSENGERS,
+    ST_STOP_CONFIRM,
+    ST_ADMIN_MODE,
+    ST_ADMIN_TGID,
+    ST_ADMIN_SHIFT,
+    ST_REMOVE_PASSENGER,
+) = range(20, 29)
 
 
 class BotHandlers:
-    """All bot handlers"""
-    
-    def __init__(self, config: BotConfig, sheets: SheetManager):
+    def __init__(self, config, sheets):
         self.config = config
         self.sheets = sheets
-    
-    # =========================
-    # KEYBOARD HELPERS
-    # =========================
-    
-    def _main_menu(self, is_admin: bool = False) -> ReplyKeyboardMarkup:
-        """Create main menu keyboard"""
-        rows = [
-            [KeyboardButton(Buttons.ADD)],
-            [KeyboardButton(Buttons.PASS)],
-            [KeyboardButton(Buttons.DEL)],
-            [KeyboardButton(Buttons.MY)],
-            [KeyboardButton(Buttons.CANCEL)],
-        ]
-        if is_admin:
-            rows.append([KeyboardButton(Buttons.FORCE_WEEKLY)])
-            rows.append([KeyboardButton(Buttons.SHUTDOWN)])
-        return ReplyKeyboardMarkup(rows, resize_keyboard=True)
-    
-    def _yes_no_keyboard(self) -> ReplyKeyboardMarkup:
-        """Create yes/no keyboard"""
-        return ReplyKeyboardMarkup(
-            [[KeyboardButton(Buttons.YES), KeyboardButton(Buttons.NO)]],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        )
-    
-    def _shift_keyboard(self) -> ReplyKeyboardMarkup:
-        """Create shift selection keyboard"""
-        return ReplyKeyboardMarkup(
-            [[KeyboardButton(Buttons.DAY), KeyboardButton(Buttons.NIGHT)],
-             [KeyboardButton(Buttons.CANCEL)]],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        )
-    
-    def _cancel_keyboard(self) -> ReplyKeyboardMarkup:
-        """Create keyboard with only the cancel button"""
-        return ReplyKeyboardMarkup(
-            [[KeyboardButton(Buttons.CANCEL)]],
-            resize_keyboard=True,
-        )
-    
-    async def show_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show main menu"""
-        is_admin = update.effective_user.id in self.config.ADMIN_USERS
-        await update.message.reply_text(
-            "Выберите действие кнопками 👇",
-            reply_markup=self._main_menu(is_admin),
-        )
-    
-    # =========================
-    # BASIC COMMANDS
-    # =========================
-    
-    async def start_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start command"""
-        await self.show_menu(update, context)
-    
-    async def cancel_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle cancel action"""
-        context.user_data.clear()
-        await update.message.reply_text("Ок, отменил.", reply_markup=ReplyKeyboardRemove())
-        await self.show_menu(update, context)
-        return ConversationHandler.END
-    
-    async def my_driver_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show current driver info"""
-        try:
-            driver = self.sheets.get_driver(update.effective_user.id)
-            if not driver:
-                await update.message.reply_text("Вы не найдены в drivers.")
-                await self.show_menu(update, context)
-                return
-            
-            dp = self.sheets.get_driver_passengers(update.effective_user.id)
-            passengers = dp.passengers if dp else []
-            
-            msg = f"🚗 Ваш водитель:\n"
-            msg += f"Name: {driver.name}\n"
-            msg += f"Shift: {driver.shift.to_display()}\n"
-            msg += f"Phone: {driver.phone}\n"
-            msg += f"Car: {driver.car}\n"
-            msg += f"Plates: {driver.plates}\n\n"
-            msg += "👥 Пассажиры:\n"
-            msg += "\n".join([f"- {p}" for p in passengers]) if passengers else "- (нет)"
-            
-            await update.message.reply_text(msg)
-            
-        except SheetError as e:
-            logging.error(f"Error in my_driver_cmd: {e}")
-            await update.message.reply_text("⚠️ Ошибка доступа к таблице. Попробуйте позже.")
-        
-        await self.show_menu(update, context)
-    
-    async def shutdown_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle shutdown command (admin only)"""
-        if update.effective_user.id not in self.config.ADMIN_USERS:
-            await update.message.reply_text("Нет доступа.")
-            await self.show_menu(update, context)
+
+    # ======================================================
+    # Utility
+    # ======================================================
+
+    async def log_admin(
+        self,
+        context: ContextTypes.DEFAULT_TYPE,
+        title: str,
+        details: str = "",
+        update: Optional[Update] = None,
+    ):
+        if not self.config.ADMIN_CHAT_ID:
             return
-        
-        await update.message.reply_text("Останавливаюсь ✅")
-        await context.application.stop()
-        await context.application.shutdown()
-    
-    # =========================
-    # ADD DRIVER FLOW
-    # =========================
-    
-    async def add_driver_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start add driver conversation"""
-        context.user_data.clear()
-        await update.message.reply_text(
-            "Введи СВОИ Имя и Фамилию на АНГЛИЙСКОМ ЯЗЫКЕ",
-            reply_markup=self._cancel_keyboard()
-        )
-        return ADD_NAME
-    
-    async def add_driver_name(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle driver name input"""
-        name = update.message.text.strip()
-        context.user_data["name"] = name
-        
-        try:
-            employee = self.sheets.get_employee_by_name(name)
-            
-            if not employee:
-                await update.message.reply_text(
-                    "Сотрудник не найден в таблице employees.\n"
-                    "Обратитесь к менеджеру."
-                )
-                return ConversationHandler.END
-            
-            # --- PHONE CHECK TEMPORARILY DISABLED ---
-            # if not employee.phone:
-            #     await update.message.reply_text(
-            #         "Телефон у сотрудника отсутствует. Обратитесь к менеджеру."
-            #     )
-            #     return ConversationHandler.END
 
-            context.user_data["phone"] = employee.phone
-            context.user_data["shift_from_employees"] = employee.shift.to_display()
+        uid = update.effective_user.id if update else None
+        uname = update.effective_user.username if update else None
 
-            # --- PHONE CONFIRMATION TEMPORARILY DISABLED ---
-            # await update.message.reply_text(
-            #     f"Найден номер: {employee.phone}\nЭто правильный номер?",
-            #     reply_markup=self._yes_no_keyboard(),
-            # )
-            # return CONFIRM_PHONE
+        msg = f"🧾 {title}"
+        meta = []
+        if uid:
+            meta.append(f"uid={uid}")
+        if uname:
+            meta.append(f"@{uname}")
+        if meta:
+            msg += "\n(" + " | ".join(meta) + ")"
+        if details:
+            msg += "\n" + details
 
-            # Use shift from employees sheet directly (shift question also disabled below)
-            context.user_data["shift"] = employee.shift.to_display()
-
-            await update.message.reply_text(
-                "На какой машине ты ездишь? Напиши:",
-                reply_markup=self._cancel_keyboard(),
-            )
-            return ADD_CAR
-            
-        except SheetError as e:
-            logging.error(f"Error in add_driver_name: {e}")
-            await update.message.reply_text("⚠️ Ошибка доступа к таблице. Попробуйте позже.")
-            return ConversationHandler.END
-    
-    # --- CONFIRM PHONE TEMPORARILY DISABLED ---
-    # async def confirm_phone(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    #     """Handle phone confirmation"""
-    #     answer = update.message.text.strip().lower()
-    #
-    #     if answer != "да":
-    #         await update.message.reply_text(
-    #             "Запись не создана. Обратитесь к менеджеру.",
-    #             reply_markup=ReplyKeyboardRemove(),
-    #         )
-    #         await self.show_menu(update, context)
-    #         return ConversationHandler.END
-    #
-    #     await update.message.reply_text(
-    #         "В какой смене ты работаешь?",
-    #         reply_markup=self._shift_keyboard(),
-    #     )
-    #     return ADD_SHIFT
-
-    # --- ADD DRIVER SHIFT TEMPORARILY DISABLED ---
-    # async def add_driver_shift(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    #     """Handle shift selection"""
-    #     raw = update.message.text.strip()
-    #     shift = ShiftType.from_string(raw)
-    #
-    #     if shift == ShiftType.UNKNOWN:
-    #         await update.message.reply_text(
-    #             "Пожалуйста, выберите Shift кнопками: Day или Night.",
-    #             reply_markup=self._shift_keyboard(),
-    #         )
-    #         return ADD_SHIFT
-    #
-    #     context.user_data["shift"] = shift.to_display()
-    #
-    #     await update.message.reply_text(
-    #         "На какой машине ты ездишь? Напиши:",
-    #         reply_markup=self._cancel_keyboard()
-    #     )
-    #     return ADD_CAR
-    
-    async def add_driver_car(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle car input"""
-        car = update.message.text.strip()
-        if not car:
-            await update.message.reply_text("ТЫ НЕ ВПИСАЛ МАШИНУ. Напиши название НА АНГЛИЙСКОМ:")
-            return ADD_CAR
-        
-        context.user_data["car"] = car
-        await update.message.reply_text("укажи LICENCE PLATES")
-        return ADD_PLATES
-    
-    async def add_driver_plates(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle license plates input"""
-        plates = update.message.text.strip()
-        if not plates:
-            await update.message.reply_text("ТЫ НЕ ВПИСАЛ LICENCE PLATES, Напиши Еще раз:")
-            return ADD_PLATES
-        
         try:
-            # Create driver object
-            driver = Driver(
-                name=context.user_data["name"],
-                tg_id=update.effective_user.id,
-                phone=context.user_data["phone"],
-                shift=ShiftType.from_string(context.user_data["shift"]),
-                car=context.user_data["car"],
-                plates=plates,
-                is_active=True,
-            )
-            
-            # Save driver
-            is_new, _ = self.sheets.upsert_driver(driver)
-            
-            # Update employee record (self-assignment)
-            result = self.sheets.update_employee_driver(driver.name, driver.name, driver.tg_id)
-            if not result.get('success'):
-                if result.get('error') == 'sheet_protected':
-                    await update.message.reply_text(
-                        "⚠️ Не могу обновить данные: таблица защищена от редактирования.\n"
-                        "Свяжитесь с администратором для снятия защиты с листа 'employees'."
-                    )
-                else:
-                    await update.message.reply_text(
-                        f"❌ Ошибка при обновлении: {result.get('message', 'Unknown error')}"
-                    )
-                await self.show_menu(update, context)
-                return ConversationHandler.END
-            
-            if is_new:
-                await update.message.reply_text("✅ Водитель добавлен")
-            else:
-                await update.message.reply_text("✅ Водитель обновлён")
-            
-            logging.info(f"Driver {'created' if is_new else 'updated'}: {driver.name} (TG:{driver.tg_id})")
-            
-        except SheetError as e:
-            logging.error(f"Error in add_driver_plates: {e}")
-            await update.message.reply_text("⚠️ Ошибка сохранения. Попробуйте позже.")
-        
-        await self.show_menu(update, context)
-        return ConversationHandler.END
-    
-    # =========================
-    # PASSENGERS FLOW
-    # =========================
-    
-    async def passengers_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start passengers conversation"""
-        try:
-            driver = self.sheets.get_driver(update.effective_user.id)
-            if not driver:
-                await update.message.reply_text("Вы не водитель. Сначала добавьте себя.")
-                return ConversationHandler.END
-            
-            await update.message.reply_text(
-                f"Напиши имена пассажиров НА АНГЛИЙСКОМ (до {self.config.MAX_PASSENGERS}), "
-                f"каждого с новой строки:\n\n"
-                "ПРИМЕР:\nIvan Ivanov\nPetr Petrov",
-                reply_markup=self._cancel_keyboard()
-            )
-            return PASS_INPUT
-            
-        except SheetError as e:
-            logging.error(f"Error in passengers_start: {e}")
-            await update.message.reply_text("⚠️ Ошибка доступа к таблице. Попробуйте позже.")
-            return ConversationHandler.END
-    
-    async def passengers_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle passengers input"""
-        try:
-            driver = self.sheets.get_driver(update.effective_user.id)
-            if not driver:
-                await update.message.reply_text("Вы не водитель. Сначала добавьте себя.")
-                return ConversationHandler.END
-            
-            # Parse input
-            raw = update.message.text.strip()
-            names = [x.strip() for x in raw.replace("\n", ",").split(",") if x.strip()]
-            
-            # Remove duplicates while preserving order
-            seen = set()
-            unique_names = []
-            for name in names:
-                norm = normalize_text(name)
-                if norm not in seen:
-                    seen.add(norm)
-                    unique_names.append(name)
-            
-            if not unique_names:
-                await update.message.reply_text("Пусто. Введите имена.")
-                return PASS_INPUT
-            
-            if len(unique_names) > self.config.MAX_PASSENGERS:
-                await update.message.reply_text(f"Максимум {self.config.MAX_PASSENGERS} пассажира.")
-                return PASS_INPUT
-            
-            # Validate passengers
-            valid_employees, errors = self.sheets.validate_passengers(
-                driver.tg_id,
-                driver.shift,
-                unique_names
-            )
-            
-            if errors:
-                await update.message.reply_text("\n\n".join(errors))
-                await update.message.reply_text("Попробуй снова")
-                return PASS_INPUT
-            
-            # Get existing passengers
-            existing_dp = self.sheets.get_driver_passengers(driver.tg_id)
-            existing_passengers = existing_dp.passengers if existing_dp else []
-            
-            # Merge: existing + new (no duplicates)
-            existing_norm = {normalize_text(p) for p in existing_passengers}
-            merged = list(existing_passengers)
-            for name in unique_names:
-                if normalize_text(name) not in existing_norm:
-                    merged.append(name)
-                    existing_norm.add(normalize_text(name))
-            
-            if len(merged) > self.config.MAX_PASSENGERS:
-                await update.message.reply_text(f"Максимум {self.config.MAX_PASSENGERS} пассажира.")
-                return PASS_INPUT
-            
-            # Save to drivers_passengers
-            dp = DriverPassengers(
-                driver_name=driver.name,
-                driver_tgid=driver.tg_id,
-                phone=driver.phone,
-                shift=driver.shift,
-                passengers=merged,
-            )
-            self.sheets.upsert_driver_passengers(dp)
-            
-            # Update employees table
-            for name in unique_names:
-                result = self.sheets.update_employee_driver(name, driver.name, driver.tg_id)
-                if not result.get('success'):
-                    if result.get('error') == 'sheet_protected':
-                        await update.message.reply_text(
-                            "⚠️ Не могу обновить данные: таблица защищена от редактирования.\n"
-                            "Свяжитесь с администратором для снятия защиты с листа 'employees'."
-                        )
-                    else:
-                        await update.message.reply_text(
-                            f"❌ Ошибка при обновлении: {result.get('message', 'Unknown error')}"
-                        )
-                    await self.show_menu(update, context)
-                    return ConversationHandler.END
-            
-            # Driver self-assignment
-            result = self.sheets.update_employee_driver(driver.name, driver.name, driver.tg_id)
-            if not result.get('success'):
-                if result.get('error') == 'sheet_protected':
-                    await update.message.reply_text(
-                        "⚠️ Не могу обновить данные: таблица защищена от редактирования.\n"
-                        "Свяжитесь с администратором для снятия защиты с листа 'employees'."
-                    )
-                else:
-                    await update.message.reply_text(
-                        f"❌ Ошибка при обновлении: {result.get('message', 'Unknown error')}"
-                    )
-                await self.show_menu(update, context)
-                return ConversationHandler.END
-            
-            await update.message.reply_text("✅ Пассажиры добавлены.")
-            logging.info(f"Passengers updated for driver {driver.name} (TG:{driver.tg_id}): {merged}")
-            
-        except SheetError as e:
-            logging.error(f"Error in passengers_input: {e}")
-            await update.message.reply_text("⚠️ Ошибка сохранения. Попробуйте позже.")
-        
-        await self.show_menu(update, context)
-        return ConversationHandler.END
-    
-    # =========================
-    # DELETE PASSENGER FLOW
-    # =========================
-    
-    async def delete_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start delete passenger conversation"""
-        try:
-            driver = self.sheets.get_driver(update.effective_user.id)
-            if not driver:
-                await update.message.reply_text("Вы не водитель. Сначала добавьте себя.")
-                return ConversationHandler.END
-            
-            dp = self.sheets.get_driver_passengers(update.effective_user.id)
-            
-            if not dp or not dp.passengers:
-                await update.message.reply_text("У вас нет пассажиров для удаления.")
-                return ConversationHandler.END
-            
-            context.user_data["passengers"] = dp.passengers
-            
-            await update.message.reply_text(
-                "Ваши пассажиры:\n" +
-                "\n".join([f"- {p}" for p in dp.passengers]) +
-                "\n\nВведите имя пассажира для удаления:",
-                reply_markup=self._cancel_keyboard()
-            )
-            return DEL_INPUT
-            
-        except SheetError as e:
-            logging.error(f"Error in delete_start: {e}")
-            await update.message.reply_text("⚠️ Ошибка доступа к таблице. Попробуйте позже.")
-            return ConversationHandler.END
-    
-    async def delete_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle delete passenger input"""
-        name = update.message.text.strip()
-        if not name:
-            await update.message.reply_text("Пусто. Введите имя пассажира:")
-            return DEL_INPUT
-        
-        passengers = context.user_data.get("passengers", [])
-        if not passengers:
-            await update.message.reply_text("Диалог сбился. Нажмите кнопку «Удалить пассажира» ещё раз.")
-            return ConversationHandler.END
-        
-        # Check if name is in the list
-        name_norm = normalize_text(name)
-        if name_norm not in {normalize_text(p) for p in passengers}:
-            await update.message.reply_text(
-                "Пассажир не найден в вашем списке. Введите точное имя ещё раз."
-            )
-            return DEL_INPUT
-        
-        try:
-            # Remove passenger
-            removed = self.sheets.remove_passenger(update.effective_user.id, name)
-            
-            if not removed:
-                await update.message.reply_text("Не смог найти пассажира. Попробуйте ещё раз.")
-                return DEL_INPUT
-            
-            # Clear employee assignment (only if assigned to this driver)
-            self.sheets.clear_employee_driver(name, only_if_driver_tgid=update.effective_user.id)
-            
-            await update.message.reply_text("✅ Пассажир удалён.")
-            logging.info(f"Passenger {name} removed from driver TG:{update.effective_user.id}")
-            
-        except SheetError as e:
-            logging.error(f"Error in delete_input: {e}")
-            await update.message.reply_text("⚠️ Ошибка удаления. Попробуйте позже.")
-        
-        await self.show_menu(update, context)
-        return ConversationHandler.END
-    
-    # =========================
-    # WEEKLY CHECK
-    # =========================
-    
-    async def weekly_check(self, context: ContextTypes.DEFAULT_TYPE):
-        """
-        Weekly confirmation check for drivers.
-        Runs on Sundays, asks drivers if they still have the same passengers.
-        """
-        shift_kind_str = context.job.data  # "day" or "night"
-        shift_kind = ShiftType.from_string(shift_kind_str)
-        
-        # Guard: only run on Sundays (unless manual)
-        now_local = datetime.now(ZoneInfo(self.config.TIMEZONE))
-        is_manual = getattr(context.job, "name", None) == "manual"
-        
-        if now_local.weekday() != 6 and not is_manual:
-            logging.info(
-                f"Skipping weekly check: not Sunday. now={now_local.isoformat()} "
-                f"tz={self.config.TIMEZONE} shift={shift_kind_str}"
-            )
-            return
-        
-        try:
-            drivers = self.sheets.get_drivers_for_shift(shift_kind)
-            state = get_state_manager()
-            
-            for driver in drivers:
-                if not driver.tg_id:
-                    continue
-                
-                dp = self.sheets.get_driver_passengers(driver.tg_id)
-                passengers = dp.passengers if dp else []
-                
-                txt = "Еженедельная проверка 🚘\n\n"
-                txt += "Текущие пассажиры:\n"
-                if passengers:
-                    txt += "\n".join([f"• {p}" for p in passengers])
-                else:
-                    txt += "— (пассажиров нет)"
-                txt += "\n\nТы всё ещё возишь этих же людей?\nОтветь: Да или Нет\n"
-                txt += f"Если не ответишь за {self.config.CONFIRMATION_TIMEOUT_MINUTES} минут — запись будет очищена."
-                
-                try:
-                    await context.bot.send_message(
-                        chat_id=driver.tg_id,
-                        text=txt,
-                        reply_markup=self._yes_no_keyboard()
-                    )
-                    
-                    # Add to pending confirmations
-                    state.add_pending_confirmation(driver.tg_id, shift_kind_str)
-                    
-                    # Schedule timeout
-                    context.job_queue.run_once(
-                        self.weekly_timeout,
-                        when=timedelta(minutes=self.config.CONFIRMATION_TIMEOUT_MINUTES),
-                        data={"tg_id": driver.tg_id},
-                        name=f"weekly_timeout_{driver.tg_id}",
-                    )
-                    
-                    logging.info(f"Weekly check sent to driver {driver.name} (TG:{driver.tg_id})")
-                    
-                except Exception as e:
-                    logging.error(f"Failed to send weekly check to driver TG:{driver.tg_id}: {e}")
-            
-            # Update last check timestamp
-            state.update_last_weekly_check(shift_kind_str)
-            
-        except SheetError as e:
-            logging.error(f"Error in weekly_check: {e}")
-    
-    async def weekly_timeout(self, context: ContextTypes.DEFAULT_TYPE):
-        """Handle timeout for weekly confirmation"""
-        tg_id = context.job.data["tg_id"]
-        state = get_state_manager()
-        
-        # Check if already responded
-        if not state.has_pending_confirmation(tg_id):
-            return
-        
-        state.remove_pending_confirmation(tg_id)
-        
-        try:
-            # Clear passengers
-            cleared = self.sheets.clear_driver_passengers(tg_id)
-            
-            # Clear employee assignments
-            for passenger_name in cleared:
-                self.sheets.clear_employee_driver(passenger_name, only_if_driver_tgid=tg_id)
-            
             await context.bot.send_message(
-                chat_id=tg_id,
-                text=(
-                    f"⏰ {self.config.CONFIRMATION_TIMEOUT_MINUTES} минут прошло — "
-                    "я очистил запись пассажиров. Если нужно — укажи заново кнопкой «👥 Указать пассажиров»."
+                chat_id=self.config.ADMIN_CHAT_ID,
+                text=msg,
+            )
+        except Exception:
+            pass
+
+    def kb_main(self):
+        return ReplyKeyboardMarkup(
+            [
+                [Buttons.BECOME_DRIVER, Buttons.ADD_PASSENGERS],
+                [Buttons.MY_RECORD, Buttons.STOP_BEING_DRIVER],
+                [Buttons.REMOVE_PASSENGER],
+                [Buttons.ADMIN_WEEKLY_TARGET],
+                [Buttons.CANCEL],
+            ],
+            resize_keyboard=True,
+        )
+
+    def kb_yes_no(self):
+        return ReplyKeyboardMarkup(
+            [[Buttons.YES, Buttons.NO]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
+
+    # ======================================================
+    # Start / Cancel
+    # ======================================================
+
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.message.reply_text(
+            "Привет. Выбери действие:",
+            reply_markup=self.kb_main(),
+        )
+
+    async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        context.user_data.clear()
+        await update.message.reply_text(
+            "Отменено.",
+            reply_markup=self.kb_main(),
+        )
+        return ConversationHandler.END
+
+    # ======================================================
+    # Become driver
+    # ======================================================
+
+    async def become_driver_start(self, update, context):
+        await update.message.reply_text(
+            "Напиши имя и фамилию (как в employees)."
+        )
+        return ST_DRIVER_NAME
+
+    async def become_driver_name(self, update, context):
+        name = update.message.text.strip()
+        emp = self.sheets.get_employee_by_name(name)
+        if not emp:
+            await update.message.reply_text(
+                "Сотрудник не найден. Проверь написание.",
+                reply_markup=self.kb_main(),
+            )
+            return ConversationHandler.END
+
+        context.user_data["driver_name"] = emp.name
+        await update.message.reply_text("Марка машины?")
+        return ST_DRIVER_CAR
+
+    async def become_driver_car(self, update, context):
+        context.user_data["driver_car"] = update.message.text.strip()
+        await update.message.reply_text("Госномер?")
+        return ST_DRIVER_PLATES
+
+    async def become_driver_plates(self, update, context):
+        tg_id = update.effective_user.id
+        driver = Driver(
+            name=context.user_data["driver_name"],
+            tg_id=tg_id,
+            car=context.user_data["driver_car"],
+            plates=update.message.text.strip(),
+        )
+        self.sheets.upsert_driver(driver)
+        await self.log_admin(
+            context, "Driver created/updated",
+            f"{driver.name} ({tg_id})", update,
+        )
+        await update.message.reply_text(
+            "Запись водителя сохранена.",
+            reply_markup=self.kb_main(),
+        )
+        return ConversationHandler.END
+
+    # ======================================================
+    # My record
+    # ======================================================
+
+    async def my_record(self, update, context):
+        tg_id = update.effective_user.id
+        driver = self.sheets.get_driver(tg_id)
+
+        if not driver:
+            await update.message.reply_text(
+                "У тебя нет записи водителя.",
+                reply_markup=self.kb_main(),
+            )
+            return
+
+        dp = self.sheets.get_driver_passengers(tg_id)
+        passengers = dp.passengers if dp else []
+
+        txt = (
+            f"📋 Твоя запись:\n\n"
+            f"👤 Имя: {driver.name}\n"
+            f"🚗 Машина: {driver.car}\n"
+            f"🔖 Номер: {driver.plates}\n\n"
+        )
+        if passengers:
+            txt += "👥 Пассажиры:\n" + "\n".join(
+                f"  {i+1}. {p}" for i, p in enumerate(passengers)
+            )
+        else:
+            txt += "👥 Пассажиры: нет"
+
+        await update.message.reply_text(txt, reply_markup=self.kb_main())
+
+    # ======================================================
+    # Stop being driver
+    # ======================================================
+
+    async def stop_being_driver_start(self, update, context):
+        tg_id = update.effective_user.id
+        if not self.sheets.get_driver(tg_id):
+            await update.message.reply_text(
+                "У тебя нет записи водителя.",
+                reply_markup=self.kb_main(),
+            )
+            return ConversationHandler.END
+
+        await update.message.reply_text(
+            "Удалить твою запись водителя и список пассажиров?",
+            reply_markup=self.kb_yes_no(),
+        )
+        return ST_STOP_CONFIRM
+
+    async def stop_being_driver_confirm(self, update, context):
+        tg_id = update.effective_user.id
+
+        if update.message.text == Buttons.YES:
+            self.sheets.delete_driver(tg_id)
+
+            dp = self.sheets.get_driver_passengers(tg_id)
+            if dp:
+                dp.passengers = []
+                self.sheets.upsert_driver_passengers(dp)
+
+            await self.log_admin(
+                context, "Driver deleted", f"tg_id={tg_id}", update,
+            )
+            await update.message.reply_text(
+                "Запись удалена.",
+                reply_markup=self.kb_main(),
+            )
+        else:
+            await update.message.reply_text(
+                "Отменено.",
+                reply_markup=self.kb_main(),
+            )
+
+        return ConversationHandler.END
+
+    # ======================================================
+    # Add passengers
+    # ======================================================
+
+    async def add_passengers_start(self, update, context):
+        tg_id = update.effective_user.id
+        if not self.sheets.get_driver(tg_id):
+            await update.message.reply_text(
+                "Сначала нужно создать запись водителя.",
+                reply_markup=self.kb_main(),
+            )
+            return ConversationHandler.END
+
+        await update.message.reply_text(
+            "Введи пассажиров (каждого с новой строки, максимум 4)."
+        )
+        return ST_ADD_PASSENGERS
+
+    async def add_passengers_input(self, update, context):
+        tg_id = update.effective_user.id
+        names = [
+            x.strip()
+            for x in update.message.text.splitlines()
+            if x.strip()
+        ]
+
+        valid, errors = self.sheets.validate_passengers(tg_id, names)
+
+        if errors:
+            await update.message.reply_text(
+                "\n".join(errors),
+                reply_markup=self.kb_main(),
+            )
+            return ConversationHandler.END
+
+        driver = self.sheets.get_driver(tg_id)
+        dp = DriverPassengers(
+            driver_name=driver.name,
+            driver_tgid=tg_id,
+            passengers=[e.name for e in valid],
+        )
+        self.sheets.upsert_driver_passengers(dp)
+
+        await self.log_admin(
+            context, "Passengers updated",
+            f"Driver {driver.name}\n" + "\n".join([e.name for e in valid]),
+            update,
+        )
+        await update.message.reply_text(
+            "Пассажиры сохранены.",
+            reply_markup=self.kb_main(),
+        )
+        return ConversationHandler.END
+
+    # ======================================================
+    # Remove passenger
+    # ======================================================
+
+    async def remove_passenger_start(self, update, context):
+        tg_id = update.effective_user.id
+        dp = self.sheets.get_driver_passengers(tg_id)
+
+        if not dp or not dp.passengers:
+            await update.message.reply_text(
+                "У тебя нет пассажиров.",
+                reply_markup=self.kb_main(),
+            )
+            return ConversationHandler.END
+
+        # Сохраняем список чтобы потом сверить выбор
+        context.user_data["passengers_to_remove_from"] = dp.passengers[:]
+
+        # Каждый пассажир — отдельная кнопка, плюс «Назад»
+        kb = ReplyKeyboardMarkup(
+            [[p] for p in dp.passengers] + [[Buttons.CANCEL]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
+        await update.message.reply_text(
+            "Выбери пассажира для удаления:",
+            reply_markup=kb,
+        )
+        return ST_REMOVE_PASSENGER
+
+    async def remove_passenger_input(self, update, context):
+        tg_id = update.effective_user.id
+        chosen = update.message.text.strip()
+
+        # Получаем актуальный список из sheets (не из кэша user_data)
+        dp = self.sheets.get_driver_passengers(tg_id)
+        if not dp:
+            await update.message.reply_text(
+                "Нет данных о пассажирах.",
+                reply_markup=self.kb_main(),
+            )
+            return ConversationHandler.END
+
+        # Ищем совпадение без учёта регистра
+        match = next(
+            (p for p in dp.passengers if p.casefold() == chosen.casefold()),
+            None,
+        )
+
+        if not match:
+            await update.message.reply_text(
+                "Пассажир не найден — попробуй снова.",
+                reply_markup=self.kb_main(),
+            )
+            return ConversationHandler.END
+
+        dp.passengers.remove(match)
+        self.sheets.upsert_driver_passengers(dp)
+
+        await self.log_admin(
+            context, "Passenger removed",
+            f"Driver tg_id={tg_id}, removed={match}", update,
+        )
+
+        # Показываем обновлённый список или сообщение если пусто
+        if dp.passengers:
+            remaining = "\n".join(f"  {i+1}. {p}" for i, p in enumerate(dp.passengers))
+            await update.message.reply_text(
+                f"Пассажир «{match}» удалён.\n\nОставшиеся:\n{remaining}",
+                reply_markup=self.kb_main(),
+            )
+        else:
+            await update.message.reply_text(
+                f"Пассажир «{match}» удалён. Список пассажиров пуст.",
+                reply_markup=self.kb_main(),
+            )
+
+        context.user_data.pop("passengers_to_remove_from", None)
+        return ConversationHandler.END
+
+    # ======================================================
+    # Weekly
+    # ======================================================
+
+    async def _send_weekly(self, context, tg_id, shift):
+        dp = self.sheets.get_driver_passengers(tg_id)
+        passengers = dp.passengers if dp else []
+
+        txt = "Weekly проверка.\n\n"
+        txt += "Текущие пассажиры:\n"
+        txt += "\n".join(passengers) if passengers else "Нет пассажиров"
+        txt += "\n\nВсё актуально?"
+
+        await context.bot.send_message(
+            chat_id=tg_id,
+            text=txt,
+            reply_markup=self.kb_yes_no(),
+        )
+
+        state = get_state_manager(self.config.STATE_FILE)
+        state.add_pending(tg_id, shift)
+
+        context.job_queue.run_once(
+            self._weekly_timeout,
+            when=timedelta(minutes=self.config.CONFIRMATION_TIMEOUT_MINUTES),
+            data={"tg_id": tg_id, "shift": shift},
+        )
+
+    async def _weekly_timeout(self, context):
+        data = context.job.data
+        tg_id = data["tg_id"]
+        state = get_state_manager(self.config.STATE_FILE)
+
+        if not state.is_pending(tg_id):
+            return
+
+        dp = self.sheets.get_driver_passengers(tg_id)
+        if dp:
+            dp.passengers = []
+            self.sheets.upsert_driver_passengers(dp)
+
+        state.remove_pending(tg_id)
+        await self.log_admin(
+            context, "Weekly timeout — список очищен", f"tg_id={tg_id}",
+        )
+
+    async def weekly_answer(self, update, context):
+        tg_id = update.effective_user.id
+        state = get_state_manager(self.config.STATE_FILE)
+
+        if not state.is_pending(tg_id):
+            return
+
+        if update.message.text == Buttons.YES:
+            state.remove_pending(tg_id)
+            await update.message.reply_text(
+                "Ок, список оставлен.",
+                reply_markup=self.kb_main(),
+            )
+        else:
+            dp = self.sheets.get_driver_passengers(tg_id)
+            if dp:
+                dp.passengers = []
+                self.sheets.upsert_driver_passengers(dp)
+            state.remove_pending(tg_id)
+            await update.message.reply_text(
+                "Список очищен.",
+                reply_markup=self.kb_main(),
+            )
+
+    # ======================================================
+    # Admin weekly
+    # ======================================================
+
+    async def admin_weekly_start(self, update, context):
+        await update.message.reply_text(
+            "Выбери режим:",
+            reply_markup=ReplyKeyboardMarkup(
+                [
+                    [Buttons.ADMIN_MODE_TGID],
+                    [Buttons.ADMIN_MODE_SHIFT],
+                    [Buttons.CANCEL],
+                ],
+                resize_keyboard=True,
+            ),
+        )
+        return ST_ADMIN_MODE
+
+    async def admin_mode(self, update, context):
+        txt = update.message.text
+
+        if txt == Buttons.ADMIN_MODE_TGID:
+            await update.message.reply_text("Введи TGID:")
+            return ST_ADMIN_TGID
+
+        if txt == Buttons.ADMIN_MODE_SHIFT:
+            await update.message.reply_text(
+                "Выбери смену:",
+                reply_markup=ReplyKeyboardMarkup(
+                    [[Buttons.SHIFT_DAY], [Buttons.SHIFT_NIGHT]],
+                    resize_keyboard=True,
                 ),
             )
-            
-            logging.info(f"Weekly timeout cleared passengers for driver TG:{tg_id}")
-            
-        except Exception as e:
-            logging.error(f"Error in weekly_timeout for TG:{tg_id}: {e}")
-    
-    async def weekly_answer_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle yes/no answer to weekly check"""
-        tg_id = update.effective_user.id
-        text = update.message.text.strip().lower()
-        
-        state = get_state_manager()
-        
-        if not state.has_pending_confirmation(tg_id):
-            return  # Not waiting for answer from this user
-        
-        # Remove from pending
-        state.remove_pending_confirmation(tg_id)
-        
-        # Cancel timeout job
-        current_jobs = context.job_queue.get_jobs_by_name(f"weekly_timeout_{tg_id}")
-        for job in current_jobs:
-            job.schedule_removal()
-        
-        if text == "да":
+            return ST_ADMIN_SHIFT
+
+        return ConversationHandler.END
+
+    async def admin_tgid(self, update, context):
+        raw = update.message.text.strip()
+
+        if not raw.isdigit():
             await update.message.reply_text(
-                "✅ Ок, ничего не меняю.",
-                reply_markup=ReplyKeyboardRemove()
+                "TGID должен быть числом.",
+                reply_markup=self.kb_main(),
             )
-            await self.show_menu(update, context)
-            logging.info(f"Weekly check confirmed by driver TG:{tg_id}")
-            
-        elif text == "нет":
-            try:
-                # Clear passengers
-                cleared = self.sheets.clear_driver_passengers(tg_id)
-                
-                # Clear employee assignments
-                for passenger_name in cleared:
-                    self.sheets.clear_employee_driver(passenger_name, only_if_driver_tgid=tg_id)
-                
-                await update.message.reply_text(
-                    "✅ Ок, запись очищена.",
-                    reply_markup=ReplyKeyboardRemove()
-                )
-                await self.show_menu(update, context)
-                logging.info(f"Weekly check declined by driver TG:{tg_id}, passengers cleared")
-                
-            except SheetError as e:
-                logging.error(f"Error clearing passengers for TG:{tg_id}: {e}")
-                await update.message.reply_text("⚠️ Ошибка очистки. Обратитесь к менеджеру.")
-    
-    # =========================
-    # ADMIN COMMANDS
-    # =========================
-    
-    async def force_weekly_check(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Force weekly check manually (admin only)"""
-        if update.effective_user.id not in self.config.ADMIN_USERS:
-            await update.message.reply_text("Нет доступа.")
-            return
-        
-        # Trigger for both shifts
-        for shift in ["day", "night"]:
-            fake_job = type("Job", (), {"data": shift, "name": "manual"})()
-            fake_context = type("Context", (), {
-                "job": fake_job,
-                "bot": context.bot,
-                "job_queue": context.job_queue,
-            })()
-            
-            await self.weekly_check(fake_context)
-        
-        await update.message.reply_text("✅ Weekly-проверка запущена вручную.")
-        await self.show_menu(update, context)
+            return ConversationHandler.END
+
+        tg_id = int(raw)
+
+        if not self.sheets.get_driver(tg_id):
+            await update.message.reply_text(
+                f"Водитель с TGID {tg_id} не найден.",
+                reply_markup=self.kb_main(),
+            )
+            return ConversationHandler.END
+
+        shift = self.sheets.get_shift_for_tgid(tg_id)
+        await self._send_weekly(context, tg_id, shift.value)
+
+        await self.log_admin(
+            context, "Admin weekly TGID",
+            f"{tg_id} shift={shift.value}", update,
+        )
+        await update.message.reply_text(
+            f"Weekly отправлен водителю {tg_id}.",
+            reply_markup=self.kb_main(),
+        )
+        return ConversationHandler.END
+
+    async def admin_shift(self, update, context):
+        txt = update.message.text
+        shift = (
+            ShiftType.DAY if txt == Buttons.SHIFT_DAY else ShiftType.NIGHT
+        )
+
+        values = self.sheets._values(self.config.DRIVERS_PASSENGERS_SHEET)
+        headers = values[0]
+        col = self.sheets._col_map(headers)
+        tg_col = col.get("telegramID")
+
+        tgids = []
+        for row in values[1:]:
+            if tg_col < len(row):
+                raw = row[tg_col].strip()
+                if raw.isdigit():
+                    tid = int(raw)
+                    if self.sheets.get_shift_for_tgid(tid) == shift:
+                        tgids.append(tid)
+
+        for tid in tgids:
+            await self._send_weekly(context, tid, shift.value)
+
+        await self.log_admin(
+            context, "Admin weekly by shift",
+            f"{shift.value} count={len(tgids)}", update,
+        )
+        await update.message.reply_text(
+            f"Weekly отправлен {len(tgids)} водителям смены {shift.value}.",
+            reply_markup=self.kb_main(),
+        )
+        return ConversationHandler.END

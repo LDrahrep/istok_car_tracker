@@ -1,161 +1,136 @@
-# =========================
-# DATA MODELS & UTILITIES
-# =========================
+from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, List
 from enum import Enum
+from typing import Optional
 
 
-def parse_int_safe(value, default: int = 0) -> int:
-    """
-    Safe int parser for Google Sheets cells.
-    Handles '', None, whitespace; does not throw.
-    """
-    if value is None:
-        return default
-    s = str(value).strip()
+def normalize_text(s: str) -> str:
+    return (s or "").strip().casefold()
+
+
+def normalize_shift(raw: str) -> str:
+    s = normalize_text(raw)
+
+    # Day == Meltech
+    if s in ("day", "meltech"):
+        return "day"
+
+    if s == "night":
+        return "night"
+
     if not s:
-        return default
-    try:
-        return int(s)
-    except ValueError:
-        return default
+        return "unknown"
+
+    # new и любые другие значения не ломают систему
+    return s
 
 
 class ShiftType(Enum):
-    """Shift types"""
     DAY = "day"
     NIGHT = "night"
-    UNKNOWN = ""
-    
-    @classmethod
-    def from_string(cls, value: str) -> 'ShiftType':
-        """Parse shift from string (supports Russian and English)"""
-        if not value:
-            return cls.UNKNOWN
-            
-        value = value.strip().lower()
-        
-        if "night" in value or "ноч" in value:
-            return cls.NIGHT
-        elif "day" in value or "дн" in value:
-            return cls.DAY
-        else:
-            return cls.UNKNOWN
-    
+    UNKNOWN = "unknown"
+    OTHER = "other"
+
+    @staticmethod
+    def from_string(raw: str) -> "ShiftType":
+        s = normalize_shift(raw)
+
+        if s == "day":
+            return ShiftType.DAY
+        if s == "night":
+            return ShiftType.NIGHT
+        if s == "unknown":
+            return ShiftType.UNKNOWN
+        return ShiftType.OTHER
+
     def to_display(self) -> str:
-        """Convert to display string"""
         if self == ShiftType.DAY:
             return "Day"
-        elif self == ShiftType.NIGHT:
+        if self == ShiftType.NIGHT:
             return "Night"
-        else:
-            return ""
+        if self == ShiftType.UNKNOWN:
+            return "Unknown"
+        return "Other"
 
 
-@dataclass
-class Driver:
-    """Driver data model"""
-    name: str
-    tg_id: int
-    phone: str
-    shift: ShiftType
-    car: str
-    plates: str
-    is_active: bool = True
-    row_index: Optional[int] = None
-    
-    @classmethod
-    def from_dict(cls, data: dict, row_index: Optional[int] = None) -> 'Driver':
-        """Create Driver from sheet row dict"""
-        return cls(
-            name=data.get("Name", "").strip(),
-            tg_id=parse_int_safe(data.get("telegramID"), default=0),
-            # Your sheet uses "Phone Number" (capital N), but keep fallback for old header too:
-            phone=(data.get("Phone Number", "") or data.get("Phone number", "")).strip(),
-            shift=ShiftType.from_string(data.get("Shift", "")),
-            car=data.get("Car", "").strip(),
-            plates=data.get("Plates", "").strip(),
-            is_active=str(data.get("isActive", "TRUE")).upper() == "TRUE",
-            row_index=row_index,
-        )
+class SheetError(Exception):
+    pass
+
+
+class ValidationError(Exception):
+    pass
 
 
 @dataclass
 class Employee:
-    """Employee data model"""
     name: str
-    phone: str
-    shift: ShiftType
-    rides_with: str
-    driver_tgid: Optional[int]
-    row_index: Optional[int] = None
-    
-    @classmethod
-    def from_dict(cls, data: dict, row_index: Optional[int] = None) -> 'Employee':
-        """Create Employee from sheet row dict"""
-        # Your screenshot shows employees sheet uses "telegramID"
-        driver_tgid_raw = data.get("telegramID", "")
-        driver_tgid = parse_int_safe(driver_tgid_raw, default=0) or None
+    phone: str = ""
+    shift: str = "unknown"
+    rides_with: str = ""
+    tg_id: Optional[int] = None
 
-        return cls(
-            name=data.get("Employee", "").strip(),
-            phone=(data.get("Phone Number", "") or data.get("PhoneNumber", "")).strip(),
-            shift=ShiftType.from_string(data.get("Shift", "")),
-            rides_with=data.get("Rides with", "").strip(),
-            driver_tgid=driver_tgid,
-            row_index=row_index,
+    @staticmethod
+    def from_row(row: dict) -> "Employee":
+        tg_raw = (row.get("telegramID") or row.get("telegramid") or "").strip()
+        tg_id = int(tg_raw) if tg_raw.isdigit() else None
+
+        return Employee(
+            name=row.get("Employee") or row.get("Name") or "",
+            phone=row.get("Phone Number") or "",
+            shift=row.get("Shift") or "",
+            rides_with=row.get("Rides with") or "",
+            tg_id=tg_id,
+        )
+
+
+@dataclass
+class Driver:
+    name: str
+    tg_id: int
+    car: str = ""
+    plates: str = ""
+    is_active: bool = True
+
+    @staticmethod
+    def from_row(row: dict) -> "Driver":
+        tg_raw = (row.get("telegramID") or "").strip()
+        if not tg_raw.isdigit():
+            raise ValidationError("Driver telegramID missing")
+
+        is_active_raw = str(row.get("isActive") or "TRUE").strip().casefold()
+
+        return Driver(
+            name=row.get("Name") or "",
+            tg_id=int(tg_raw),
+            car=row.get("Car") or "",
+            plates=row.get("Plates") or "",
+            is_active=is_active_raw != "false",
         )
 
 
 @dataclass
 class DriverPassengers:
-    """Driver with passengers data model"""
     driver_name: str
     driver_tgid: int
-    phone: str
-    shift: ShiftType
-    passengers: List[str]
-    row_index: Optional[int] = None
-    
-    @classmethod
-    def from_dict(cls, data: dict, row_index: Optional[int] = None) -> 'DriverPassengers':
-        """Create DriverPassengers from sheet row dict"""
-        passengers = [
-            data.get("Passenger1", "").strip(),
-            data.get("Passenger2", "").strip(),
-            data.get("Passenger3", "").strip(),
-            data.get("Passenger4", "").strip(),
-        ]
-        passengers = [p for p in passengers if p]
-        
-        # Your drivers_passengers sheet uses telegramID, not TGID
-        return cls(
-            driver_name=data.get("Name", "").strip(),
-            driver_tgid=parse_int_safe(data.get("telegramID"), default=0),
-            phone=(data.get("Phone Number", "") or data.get("Phone number", "")).strip(),
-            shift=ShiftType.from_string(data.get("Shift", "")),
+    passengers: list[str]
+    shift_raw: str = ""
+
+    @staticmethod
+    def from_row(row: dict) -> "DriverPassengers":
+        tg_raw = (row.get("telegramID") or "").strip()
+        if not tg_raw.isdigit():
+            raise ValidationError("DriverPassengers telegramID missing")
+
+        passengers = []
+        for key in ("Passenger1", "Passenger2", "Passenger3", "Passenger4"):
+            val = (row.get(key) or "").strip()
+            if val:
+                passengers.append(val)
+
+        return DriverPassengers(
+            driver_name=row.get("Name") or "",
+            driver_tgid=int(tg_raw),
             passengers=passengers,
-            row_index=row_index,
+            shift_raw=row.get("Shift") or "",
         )
-
-
-def normalize_text(text: str) -> str:
-    """Normalize text for comparison (lowercase, strip)"""
-    return (text or "").strip().lower()
-
-
-class BotError(Exception):
-    """Base exception for bot errors"""
-    pass
-
-
-class SheetError(BotError):
-    """Sheet operation error"""
-    pass
-
-
-class ValidationError(BotError):
-    """Data validation error"""
-    pass
