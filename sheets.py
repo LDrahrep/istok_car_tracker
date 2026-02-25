@@ -316,6 +316,66 @@ class SheetManager:
         return len(updates)
 
     # =========================
+    # Passenger lookup
+    # =========================
+
+    def find_driver_for_passenger(self, passenger_name: str) -> Optional[tuple[int, str]]:
+        """Найти водителя, у которого указанный сотрудник записан пассажиром.
+
+        В таблице drivers_passengers пассажиры хранятся по имени (Passenger1..Passenger4),
+        поэтому ищем по нормализованному имени.
+
+        Возвращает (driver_tgid, driver_name) или None.
+        """
+        n = normalize_text(passenger_name)
+        if not n:
+            return None
+
+        values = self._values(self.config.DRIVERS_PASSENGERS_SHEET)
+        if not values or len(values) < 2:
+            return None
+
+        headers = values[0]
+        col = self._col_map(headers)
+        tg_col = col.get("telegramID")
+        name_col = col.get("Name")
+
+        passenger_cols = [
+            col.get("Passenger1"),
+            col.get("Passenger2"),
+            col.get("Passenger3"),
+            col.get("Passenger4"),
+        ]
+
+        for row in values[1:]:
+            hit = False
+            for pc in passenger_cols:
+                if pc is None or pc >= len(row):
+                    continue
+                if normalize_text(row[pc]) == n:
+                    hit = True
+                    break
+            if not hit:
+                continue
+
+            driver_tg = None
+            if tg_col is not None and tg_col < len(row):
+                raw = str(row[tg_col]).strip()
+                if raw.isdigit():
+                    driver_tg = int(raw)
+
+            driver_name = ""
+            if name_col is not None and name_col < len(row):
+                driver_name = str(row[name_col] or "").strip()
+
+            if driver_tg is None:
+                continue
+
+            return driver_tg, driver_name
+
+        return None
+
+    # =========================
     # Validation
     # =========================
 
