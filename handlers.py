@@ -110,7 +110,7 @@ class BotHandlers:
     async def become_driver_start(self, update, context):
         await update.message.reply_text(
             "Напиши *имя и фамилию* как в таблице сотрудников (employees).\n"
-            "Пример: `Иван Петров`",
+            "Пример: `Ivan Ivanov`",
             parse_mode="Markdown",
         )
         return ST_DRIVER_NAME
@@ -122,7 +122,7 @@ class BotHandlers:
             await update.message.reply_text(
                 "Сотрудник не найден 😕\n"
                 "Проверь написание *точно как в employees*.\n"
-                "Пример: `Иван Петров`",
+                "Пример: `Ivan Ivanov`",
                 parse_mode="Markdown",
                 reply_markup=self.kb_main(),
             )
@@ -166,7 +166,7 @@ class BotHandlers:
     async def become_driver_car(self, update, context):
         context.user_data["driver_car"] = update.message.text.strip()
         await update.message.reply_text(
-            "Госномер?\nПример: `А123ВС77`",
+            "Licence Plates?\nПример: `ABC123`",
             parse_mode="Markdown",
         )
         return ST_DRIVER_PLATES
@@ -213,7 +213,7 @@ class BotHandlers:
             f"📋 Твоя запись:\n\n"
             f"👤 Имя: {driver.name}\n"
             f"🚗 Машина: {driver.car}\n"
-            f"🔖 Номер: {driver.plates}\n\n"
+            f"🔖 Licence Plates: {driver.plates}\n\n"
         )
         if passengers:
             txt += "👥 Пассажиры:\n" + "\n".join(
@@ -307,8 +307,8 @@ class BotHandlers:
         await update.message.reply_text(
             "Введи пассажиров (каждого с новой строки), максимум *4*.\n\n"
             "Пример:\n"
-            "`Иван Петров`\n"
-            "`Мария Иванова`",
+            "`Ivan Ivanov`\n"
+            "`Maria Ivanova`",
             parse_mode="Markdown",
         )
         return ST_ADD_PASSENGERS
