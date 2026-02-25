@@ -139,23 +139,42 @@ class SheetManager:
                 existing = i
                 break
 
-        row_out = [""] * len(headers)
-
-        if "Name" in col:
-            row_out[col["Name"]] = driver.name
-        row_out[tg_col] = str(driver.tg_id)
-
-        if "Car" in col:
-            row_out[col["Car"]] = driver.car
-        if "Plates" in col:
-            row_out[col["Plates"]] = driver.plates
-        if "isActive" in col:
-            row_out[col["isActive"]] = "TRUE" if driver.is_active else "FALSE"
-
+        # ВАЖНО: обновляем ТОЛЬКО те колонки, которые управляются ботом.
+        # Это позволяет не затирать вручную заполненные поля (например Shift).
         if existing:
-            rng = f"A{existing}:{chr(ord('A') + len(headers) - 1)}{existing}"
-            ws.update(rng, [row_out])
+            updates = []
+
+            def put(key: str, value: str):
+                idx = col.get(key)
+                if idx is None:
+                    return
+                col_letter = chr(ord('A') + idx)
+                updates.append({"range": f"{col_letter}{existing}", "values": [[value]]})
+
+            put("Name", driver.name)
+            # telegramID обязателен
+            col_letter = chr(ord('A') + tg_col)
+            updates.append({"range": f"{col_letter}{existing}", "values": [[str(driver.tg_id)]]})
+            put("Car", driver.car)
+            put("Plates", driver.plates)
+            put("isActive", "TRUE" if driver.is_active else "FALSE")
+
+            ws.batch_update(updates)
         else:
+            # Для новой строки заполняем известные поля, остальные оставляем пустыми.
+            row_out = [""] * len(headers)
+
+            if "Name" in col:
+                row_out[col["Name"]] = driver.name
+            row_out[tg_col] = str(driver.tg_id)
+
+            if "Car" in col:
+                row_out[col["Car"]] = driver.car
+            if "Plates" in col:
+                row_out[col["Plates"]] = driver.plates
+            if "isActive" in col:
+                row_out[col["isActive"]] = "TRUE" if driver.is_active else "FALSE"
+
             ws.append_row(row_out, value_input_option="USER_ENTERED")
 
         self._invalidate(self.config.DRIVERS_SHEET)
@@ -208,25 +227,36 @@ class SheetManager:
                 existing = i
                 break
 
-        row_out = [""] * len(headers)
-
-        if "Name" in col:
-            row_out[col["Name"]] = dp.driver_name
-
-        row_out[tg_col] = str(dp.driver_tgid)
-
-        for idx, key in enumerate(
-            ("Passenger1", "Passenger2", "Passenger3", "Passenger4")
-        ):
-            if key in col:
-                row_out[col[key]] = (
-                    dp.passengers[idx] if idx < len(dp.passengers) else ""
-                )
-
+        # ВАЖНО: при обновлении не затираем неуправляемые колонки (например Shift).
         if existing:
-            rng = f"A{existing}:{chr(ord('A') + len(headers) - 1)}{existing}"
-            ws.update(rng, [row_out])
+            updates = []
+
+            def put(key: str, value: str):
+                idx = col.get(key)
+                if idx is None:
+                    return
+                col_letter = chr(ord('A') + idx)
+                updates.append({"range": f"{col_letter}{existing}", "values": [[value]]})
+
+            put("Name", dp.driver_name)
+            col_letter = chr(ord('A') + tg_col)
+            updates.append({"range": f"{col_letter}{existing}", "values": [[str(dp.driver_tgid)]]})
+
+            for i, key in enumerate(("Passenger1", "Passenger2", "Passenger3", "Passenger4")):
+                put(key, dp.passengers[i] if i < len(dp.passengers) else "")
+
+            ws.batch_update(updates)
         else:
+            row_out = [""] * len(headers)
+
+            if "Name" in col:
+                row_out[col["Name"]] = dp.driver_name
+            row_out[tg_col] = str(dp.driver_tgid)
+
+            for idx, key in enumerate(("Passenger1", "Passenger2", "Passenger3", "Passenger4")):
+                if key in col:
+                    row_out[col[key]] = dp.passengers[idx] if idx < len(dp.passengers) else ""
+
             ws.append_row(row_out, value_input_option="USER_ENTERED")
 
         self._invalidate(self.config.DRIVERS_PASSENGERS_SHEET)
