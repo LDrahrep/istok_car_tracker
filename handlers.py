@@ -4,6 +4,7 @@ from datetime import timedelta
 from typing import Optional
 
 from telegram import Update, ReplyKeyboardMarkup
+from telegram.helpers import escape_markdown
 from telegram.ext import ContextTypes, ConversationHandler
 
 from config import Buttons
@@ -132,7 +133,7 @@ class BotHandlers:
         if (emp.rides_with or "").strip():
             await update.message.reply_text(
                 "Похоже, сейчас ты *пассажир* (rides_with заполнен).\n\n"
-                f"Сначала тебя нужно убрать из пассажиров у водителя: *{emp.rides_with.strip()}*.\n"
+                f"Сначала тебя нужно убрать из пассажиров у водителя: *{escape_markdown(emp.rides_with.strip(), version=1)}*.\n"
                 "Попроси водителя нажать кнопку «🧑‍🤝‍🧑 Удалить пассажира» и удалить тебя из списка.\n\n"
                 "После этого ты сможешь стать водителем 🚗",
                 parse_mode="Markdown",
@@ -146,9 +147,10 @@ class BotHandlers:
         if hit:
             driver_tg, driver_name = hit
             driver_label = driver_name or str(driver_tg)
+            driver_label_md = escape_markdown(driver_label, version=1)
             await update.message.reply_text(
                 "Похоже, сейчас ты *пассажир* в списке водителя.\n\n"
-                f"Водитель: *{driver_label}*\n"
+                f"Водитель: *{driver_label_md}*\n"
                 "Сначала попроси водителя удалить тебя кнопкой «🧑‍🤝‍🧑 Удалить пассажира».\n\n"
                 "После этого ты сможешь стать водителем 🚗",
                 parse_mode="Markdown",
