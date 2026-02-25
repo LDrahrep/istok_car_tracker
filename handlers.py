@@ -149,12 +149,11 @@ class BotHandlers:
 
         # Если сотрудник уже является пассажиром — не даём стать водителем
         if (emp.rides_with or "").strip():
-            await update.message.reply_text(
+            await self._reply_md_safe(update,
                 "Похоже, сейчас ты *пассажир* (rides_with заполнен).\n\n"
                 f"Сначала тебя нужно убрать из пассажиров у водителя: *{emp.rides_with.strip()}*.\n"
                 "Попроси водителя нажать кнопку «🧑‍🤝‍🧑 Удалить пассажира» и удалить тебя из списка.\n\n"
                 "После этого ты сможешь стать водителем 🚗",
-                parse_mode="Markdown",
                 reply_markup=self.kb_main(),
             )
             return ConversationHandler.END
@@ -165,12 +164,11 @@ class BotHandlers:
         if hit:
             driver_tg, driver_name = hit
             driver_label = driver_name or str(driver_tg)
-            await update.message.reply_text(
+            await self._reply_md_safe(update,
                 "Похоже, сейчас ты *пассажир* в списке водителя.\n\n"
                 f"Водитель: *{driver_label}*\n"
                 "Сначала попроси водителя удалить тебя кнопкой «🧑‍🤝‍🧑 Удалить пассажира».\n\n"
                 "После этого ты сможешь стать водителем 🚗",
-                parse_mode="Markdown",
                 reply_markup=self.kb_main(),
             )
             return ConversationHandler.END
