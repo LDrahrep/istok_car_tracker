@@ -147,10 +147,9 @@ class BotHandlers:
         if hit:
             driver_tg, driver_name = hit
             driver_label = driver_name or str(driver_tg)
-            driver_label_md = escape_markdown(driver_label, version=1)
             await update.message.reply_text(
                 "Похоже, сейчас ты *пассажир* в списке водителя.\n\n"
-                f"Водитель: *{driver_label_md}*\n"
+                f"Водитель: *{escape_markdown(driver_label, version=1)}*\n"
                 "Сначала попроси водителя удалить тебя кнопкой «🧑‍🤝‍🧑 Удалить пассажира».\n\n"
                 "После этого ты сможешь стать водителем 🚗",
                 parse_mode="Markdown",
