@@ -4,7 +4,7 @@ from datetime import timedelta
 from typing import Optional
 
 from telegram import Update, ReplyKeyboardMarkup
-from telegram.helpers import escape_markdown
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes, ConversationHandler
 
 from config import Buttons
@@ -23,6 +23,17 @@ from persistence import get_state_manager
     ST_ADMIN_SHIFT,
     ST_REMOVE_PASSENGER,
 ) = range(20, 29)
+
+
+def _strip_markdown_v1(s: str) -> str:
+    # Remove basic Telegram Markdown v1 markers to create a safe plain-text fallback.
+    return (
+        s.replace("`", "")
+         .replace("*", "")
+         .replace("_", "")
+         .replace("[", "")
+         .replace("]", "")
+    )
 
 
 class BotHandlers:
@@ -85,6 +96,13 @@ class BotHandlers:
             one_time_keyboard=True,
         )
 
+
+    async def _reply_md_safe(self, update: Update, text: str, **kwargs):
+        """Send Markdown message, but never crash on BadRequest (fallback to plain text)."""
+        try:
+            await update.message.reply_text(text, parse_mode="Markdown", **kwargs)
+        except BadRequest:
+            await update.message.reply_text(_strip_markdown_v1(text), **kwargs)
     # ======================================================
     # Start / Cancel
     # ======================================================
@@ -133,7 +151,7 @@ class BotHandlers:
         if (emp.rides_with or "").strip():
             await update.message.reply_text(
                 "Похоже, сейчас ты *пассажир* (rides_with заполнен).\n\n"
-                f"Сначала тебя нужно убрать из пассажиров у водителя: *{escape_markdown(emp.rides_with.strip(), version=1)}*.\n"
+                f"Сначала тебя нужно убрать из пассажиров у водителя: *{emp.rides_with.strip()}*.\n"
                 "Попроси водителя нажать кнопку «🧑‍🤝‍🧑 Удалить пассажира» и удалить тебя из списка.\n\n"
                 "После этого ты сможешь стать водителем 🚗",
                 parse_mode="Markdown",
@@ -149,7 +167,7 @@ class BotHandlers:
             driver_label = driver_name or str(driver_tg)
             await update.message.reply_text(
                 "Похоже, сейчас ты *пассажир* в списке водителя.\n\n"
-                f"Водитель: *{escape_markdown(driver_label, version=1)}*\n"
+                f"Водитель: *{driver_label}*\n"
                 "Сначала попроси водителя удалить тебя кнопкой «🧑‍🤝‍🧑 Удалить пассажира».\n\n"
                 "После этого ты сможешь стать водителем 🚗",
                 parse_mode="Markdown",
