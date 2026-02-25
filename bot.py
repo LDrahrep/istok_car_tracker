@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from admin_log import format_exception
 
@@ -68,27 +69,27 @@ def build_app():
         entry_points=[
             CommandHandler("start", handlers.start),
             MessageHandler(
-                filters.Regex(f"^{Buttons.BECOME_DRIVER}$"),
+                filters.Regex(f"^{re.escape(Buttons.BECOME_DRIVER)}$"),
                 handlers.become_driver_start,
             ),
             MessageHandler(
-                filters.Regex(f"^{Buttons.ADD_PASSENGERS}$"),
+                filters.Regex(f"^{re.escape(Buttons.ADD_PASSENGERS)}$"),
                 handlers.add_passengers_start,
             ),
             MessageHandler(
-                filters.Regex(f"^{Buttons.STOP_BEING_DRIVER}$"),
+                filters.Regex(f"^{re.escape(Buttons.STOP_BEING_DRIVER)}$"),
                 handlers.stop_being_driver_start,
             ),
             MessageHandler(
-                filters.Regex(f"^{Buttons.REMOVE_PASSENGER}$"),
+                filters.Regex(f"^{re.escape(Buttons.REMOVE_PASSENGER)}$"),
                 handlers.remove_passenger_start,
             ),
             MessageHandler(
-                filters.Regex(f"^{Buttons.ADMIN_WEEKLY_TARGET}$"),
+                filters.Regex(f"^{re.escape(Buttons.ADMIN_WEEKLY_TARGET)}$"),
                 handlers.admin_weekly_start,
             ),
             MessageHandler(
-                filters.Regex(f"^{Buttons.CANCEL}$"),
+                filters.Regex(f"^{re.escape(Buttons.CANCEL)}$"),
                 handlers.cancel,
             ),
         ],
@@ -126,7 +127,7 @@ def build_app():
         },
         fallbacks=[
             MessageHandler(
-                filters.Regex(f"^{Buttons.CANCEL}$"),
+                filters.Regex(f"^{re.escape(Buttons.CANCEL)}$"),
                 handlers.cancel,
             )
         ],
@@ -138,7 +139,7 @@ def build_app():
     # My record — вне conversation, просто показывает данные
     app.add_handler(
         MessageHandler(
-            filters.Regex(f"^{Buttons.MY_RECORD}$"),
+            filters.Regex(f"^{re.escape(Buttons.MY_RECORD)}$"),
             handlers.my_record,
         )
     )
