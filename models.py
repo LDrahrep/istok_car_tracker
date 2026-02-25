@@ -22,8 +22,9 @@ def normalize_shift(raw: str) -> str:
     if not s:
         return "unknown"
 
-    # new и любые другие значения не ломают систему
-    return s
+    # Любые неожиданные значения ("new" и т.п.) не должны ломать систему.
+    # По требованиям считаем их "прочими".
+    return "other"
 
 
 class ShiftType(Enum):

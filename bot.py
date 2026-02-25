@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 
+from admin_log import format_exception
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -41,6 +43,26 @@ def build_app():
     app = Application.builder().token(
         config.TELEGRAM_BOT_TOKEN
     ).build()
+
+    async def on_error(update, context):
+        # Любые исключения логируем в админский чат (best-effort)
+        if not config.ADMIN_CHAT_ID:
+            return
+        try:
+            u = getattr(update, "effective_user", None)
+            meta = ""
+            if u:
+                meta = f"\n(uid={u.id} @{u.username})" if u.username else f"\n(uid={u.id})"
+            await context.bot.send_message(
+                chat_id=config.ADMIN_CHAT_ID,
+                text=(
+                    "🧾 Exception" + meta + "\n" + format_exception(context.error)
+                )[-3500:],
+            )
+        except Exception:
+            pass
+
+    app.add_error_handler(on_error)
 
     conv = ConversationHandler(
         entry_points=[

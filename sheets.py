@@ -49,6 +49,15 @@ class SheetManager:
     def _invalidate(self, name: str):
         self._cache.pop(name, None)
 
+    # -------------------------
+    # helpers
+    # -------------------------
+
+    @staticmethod
+    def _cell_eq(cell: str, tg_id: int) -> bool:
+        """Строгое сравнение TGID по требованиям: str(cell).strip() == str(tg_id)."""
+        return str(cell).strip() == str(tg_id)
+
     @staticmethod
     def _col_map(headers):
         return {h.strip(): i for i, h in enumerate(headers)}
@@ -109,7 +118,7 @@ class SheetManager:
             return None
 
         for row in values[1:]:
-            if tg_col < len(row) and str(row[tg_col]).strip() == str(tg_id):
+            if tg_col < len(row) and self._cell_eq(row[tg_col], tg_id):
                 return Driver.from_row(self._row_dict(headers, row))
 
         return None
@@ -126,7 +135,7 @@ class SheetManager:
 
         existing = None
         for i, row in enumerate(values[1:], start=2):
-            if tg_col < len(row) and str(row[tg_col]).strip() == str(driver.tg_id):
+            if tg_col < len(row) and self._cell_eq(row[tg_col], driver.tg_id):
                 existing = i
                 break
 
@@ -159,7 +168,7 @@ class SheetManager:
         ws = self._ws(self.config.DRIVERS_SHEET)
 
         for i, row in enumerate(values[1:], start=2):
-            if tg_col < len(row) and str(row[tg_col]).strip() == str(tg_id):
+            if tg_col < len(row) and self._cell_eq(row[tg_col], tg_id):
                 ws.delete_rows(i)
                 break
 
@@ -179,7 +188,7 @@ class SheetManager:
         tg_col = col.get("telegramID")
 
         for row in values[1:]:
-            if tg_col < len(row) and str(row[tg_col]).strip() == str(tg_id):
+            if tg_col < len(row) and self._cell_eq(row[tg_col], tg_id):
                 return DriverPassengers.from_row(
                     self._row_dict(headers, row)
                 )
@@ -195,7 +204,7 @@ class SheetManager:
 
         existing = None
         for i, row in enumerate(values[1:], start=2):
-            if tg_col < len(row) and str(row[tg_col]).strip() == str(dp.driver_tgid):
+            if tg_col < len(row) and self._cell_eq(row[tg_col], dp.driver_tgid):
                 existing = i
                 break
 
@@ -222,25 +231,111 @@ class SheetManager:
 
         self._invalidate(self.config.DRIVERS_PASSENGERS_SHEET)
 
+    def delete_driver_passengers(self, tg_id: int) -> bool:
+        """Удалить строку водителя из drivers_passengers по TGID."""
+        values = self._values(self.config.DRIVERS_PASSENGERS_SHEET)
+        if not values or len(values) < 2:
+            return False
+
+        headers = values[0]
+        col = self._col_map(headers)
+        tg_col = col.get("telegramID")
+        if tg_col is None:
+            return False
+
+        ws = self._ws(self.config.DRIVERS_PASSENGERS_SHEET)
+        for i, row in enumerate(values[1:], start=2):
+            if tg_col < len(row) and self._cell_eq(row[tg_col], tg_id):
+                ws.delete_rows(i)
+                self._invalidate(self.config.DRIVERS_PASSENGERS_SHEET)
+                return True
+
+        return False
+
+    def clear_rides_with(
+        self,
+        *,
+        tg_ids: set[int] | None = None,
+        names: set[str] | None = None,
+    ) -> int:
+        """Очистить employees.rides_with для заданных сотрудников (по TGID и/или имени).
+
+        Возвращает число обновлённых строк.
+        """
+        tg_ids = tg_ids or set()
+        names_norm = {normalize_text(n) for n in (names or set()) if n}
+
+        values = self._values(self.config.EMPLOYEES_SHEET)
+        if not values or len(values) < 2:
+            return 0
+
+        headers = values[0]
+        col = self._col_map(headers)
+
+        # В таблице встречаются разные варианты заголовков
+        tg_col = col.get("telegramID") or col.get("telegramid")
+        name_col = col.get("Employee") or col.get("Name")
+        rides_col = col.get("Rides with")
+
+        if rides_col is None:
+            return 0
+
+        ws = self._ws(self.config.EMPLOYEES_SHEET)
+        updates = []
+
+        for idx, row in enumerate(values[1:], start=2):
+            row_tg = None
+            if tg_col is not None and tg_col < len(row):
+                raw = str(row[tg_col]).strip()
+                if raw.isdigit():
+                    row_tg = int(raw)
+
+            row_name = ""
+            if name_col is not None and name_col < len(row):
+                row_name = str(row[name_col] or "")
+
+            match = False
+            if row_tg is not None and row_tg in tg_ids:
+                match = True
+            if not match and row_name and normalize_text(row_name) in names_norm:
+                match = True
+
+            if not match:
+                continue
+
+            # Ставим пустое значение в rides_with
+            col_letter = chr(ord('A') + rides_col)
+            updates.append({"range": f"{col_letter}{idx}", "values": [[""]]})
+
+        if not updates:
+            return 0
+
+        # batch_update устойчивее и быстрее
+        ws.batch_update(updates)
+        self._invalidate(self.config.EMPLOYEES_SHEET)
+        return len(updates)
+
     # =========================
     # Validation
     # =========================
 
     def validate_passengers(
         self, driver_tgid: int, names: list[str]
-    ) -> tuple[list[Employee], list[str]]:
+    ) -> tuple[list[Employee], list[str], list[str]]:
 
-        errors = []
-        valid = []
+        errors: list[str] = []
+        warnings: list[str] = []
+        valid: list[Employee] = []
 
         driver_emp = self.get_employee_by_tgid(driver_tgid)
         driver_shift = self.get_shift_for_tgid(driver_tgid)
 
         if driver_shift == ShiftType.UNKNOWN:
             errors.append(
-                "⛔ У тебя не указана смена в списке сотрудников."
+                "⛔ У тебя не указана смена в списке сотрудников (employees → Shift).\n"
+                "Попроси обновить смену или напиши администратору."
             )
-            return [], errors
+            return [], errors, warnings
 
         driver_name_norm = normalize_text(driver_emp.name) if driver_emp else ""
 
@@ -261,7 +356,10 @@ class SheetManager:
             emp = employees.get(n)
 
             if not emp:
-                errors.append(f"😕 Не найден сотрудник: {raw}")
+                warnings.append(
+                    f"😕 Не найден сотрудник: {raw} — пропущен.\n"
+                    "Проверь написание (как в employees)."
+                )
                 continue
 
             # запрет водитель = пассажир
@@ -269,23 +367,31 @@ class SheetManager:
                 (emp.tg_id and int(emp.tg_id) == int(driver_tgid))
                 or n == driver_name_norm
             ):
-                errors.append(
-                    "🙃 Водитель не может быть пассажиром."
+                warnings.append(
+                    "🙃 Водитель не может быть пассажиром — этот пункт пропущен.\n"
+                    "Если ты больше не водитель, нажми «🛑 Перестать быть водителем», "
+                    "и тогда тебя смогут добавить пассажиром."
                 )
                 continue
 
             p_shift = ShiftType.from_string(emp.shift)
 
             if p_shift != driver_shift:
-                errors.append(
-                    f"⏰ {emp.name} в другой смене."
+                warnings.append(
+                    f"⏰ {emp.name} в другой смене — пропущен."
                 )
                 continue
 
             valid.append(emp)
 
         if len(valid) > 4:
-            errors.append("⛔ Максимум 4 пассажира.")
+            warnings.append("⚠️ Максимум 4 пассажира — лишние будут проигнорированы.")
             valid = valid[:4]
 
-        return valid, errors
+        if not valid:
+            errors.append(
+                "⛔ Не получилось добавить пассажиров: после проверок список пуст.\n"
+                "Проверь имена и смену сотрудников."
+            )
+
+        return valid, errors, warnings

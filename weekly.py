@@ -37,7 +37,7 @@ async def send_weekly(bot, sheets, state, config, tg_id: int, shift: str):
     dp = sheets.get_driver_passengers(tg_id)
     passengers = dp.passengers if dp else []
 
-    txt = "Weekly проверка.\n\n"
+    txt = "📅 Еженедельная проверка списка пассажиров\n\n"
     txt += "Текущие пассажиры:\n"
     txt += "\n".join(passengers) if passengers else "Нет пассажиров"
     txt += "\n\nВсё актуально?"
@@ -50,6 +50,19 @@ async def send_weekly(bot, sheets, state, config, tg_id: int, shift: str):
         )
         state.add_pending(tg_id, shift)
         logger.info(f"Sent weekly to tg_id={tg_id} shift={shift}")
+
+        # best-effort лог в админский чат
+        if config.ADMIN_CHAT_ID:
+            try:
+                await bot.send_message(
+                    chat_id=config.ADMIN_CHAT_ID,
+                    text=(
+                        "🧾 Weekly send\n"
+                        f"tg_id={tg_id} shift={shift} passengers={len(passengers)}"
+                    ),
+                )
+            except Exception:
+                pass
     except telegram.error.Forbidden:
         logger.warning(f"Bot blocked by user tg_id={tg_id}, skipping")
     except Exception as e:
@@ -90,6 +103,16 @@ async def run(shift_arg: str):
         sys.exit(1)
 
     sent = 0
+
+    if config.ADMIN_CHAT_ID:
+        try:
+            await bot.send_message(
+                chat_id=config.ADMIN_CHAT_ID,
+                text=f"🧾 Weekly рассылка старт\nСмена: {shift_arg}",
+            )
+        except Exception:
+            pass
+
     for row in values[1:]:
         if tg_col >= len(row):
             continue
@@ -116,7 +139,11 @@ async def run(shift_arg: str):
         try:
             await bot.send_message(
                 chat_id=config.ADMIN_CHAT_ID,
-                text=f"🧾 Weekly рассылка завершена\nСмена: {shift_arg}\nОтправлено: {sent} водителям",
+                text=(
+                    "🧾 Weekly рассылка завершена\n"
+                    f"Смена: {shift_arg}\n"
+                    f"Отправлено: {sent} водителям"
+                ),
             )
         except Exception:
             pass

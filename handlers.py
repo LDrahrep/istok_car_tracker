@@ -90,14 +90,15 @@ class BotHandlers:
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
-            "Привет. Выбери действие:",
+            "Привет! Я помогу вести список водителей и пассажиров.\n\n"
+            "Выбери действие кнопками ниже:",
             reply_markup=self.kb_main(),
         )
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         await update.message.reply_text(
-            "Отменено.",
+            "Ок, отменил 👍",
             reply_markup=self.kb_main(),
         )
         return ConversationHandler.END
@@ -108,7 +109,9 @@ class BotHandlers:
 
     async def become_driver_start(self, update, context):
         await update.message.reply_text(
-            "Напиши имя и фамилию (как в employees)."
+            "Напиши *имя и фамилию* как в таблице сотрудников (employees).\n"
+            "Пример: `Иван Петров`",
+            parse_mode="Markdown",
         )
         return ST_DRIVER_NAME
 
@@ -117,18 +120,27 @@ class BotHandlers:
         emp = self.sheets.get_employee_by_name(name)
         if not emp:
             await update.message.reply_text(
-                "Сотрудник не найден. Проверь написание.",
+                "Сотрудник не найден 😕\n"
+                "Проверь написание *точно как в employees*.\n"
+                "Пример: `Иван Петров`",
+                parse_mode="Markdown",
                 reply_markup=self.kb_main(),
             )
             return ConversationHandler.END
 
         context.user_data["driver_name"] = emp.name
-        await update.message.reply_text("Марка машины?")
+        await update.message.reply_text(
+            "Марка/модель машины?\nПример: `Kia Rio`",
+            parse_mode="Markdown",
+        )
         return ST_DRIVER_CAR
 
     async def become_driver_car(self, update, context):
         context.user_data["driver_car"] = update.message.text.strip()
-        await update.message.reply_text("Госномер?")
+        await update.message.reply_text(
+            "Госномер?\nПример: `А123ВС77`",
+            parse_mode="Markdown",
+        )
         return ST_DRIVER_PLATES
 
     async def become_driver_plates(self, update, context):
@@ -145,7 +157,8 @@ class BotHandlers:
             f"{driver.name} ({tg_id})", update,
         )
         await update.message.reply_text(
-            "Запись водителя сохранена.",
+            "✅ Запись водителя сохранена.\n"
+            "Теперь можешь добавить пассажиров кнопкой «👥 Добавить пассажиров».",
             reply_markup=self.kb_main(),
         )
         return ConversationHandler.END
@@ -197,7 +210,8 @@ class BotHandlers:
             return ConversationHandler.END
 
         await update.message.reply_text(
-            "Удалить твою запись водителя и список пассажиров?",
+            "Ты точно хочешь перестать быть водителем?\n\n"
+            "Я удалю твою запись водителя и отвяжу пассажиров.",
             reply_markup=self.kb_yes_no(),
         )
         return ST_STOP_CONFIRM
@@ -206,23 +220,43 @@ class BotHandlers:
         tg_id = update.effective_user.id
 
         if update.message.text == Buttons.YES:
-            self.sheets.delete_driver(tg_id)
-
+            # Собираем текущих пассажиров (по именам) до удаления
             dp = self.sheets.get_driver_passengers(tg_id)
-            if dp:
-                dp.passengers = []
-                self.sheets.upsert_driver_passengers(dp)
+            passenger_names = set(dp.passengers) if dp else set()
+
+            # Очищаем employees.rides_with у пассажиров и у самого водителя
+            cleared = 0
+            try:
+                cleared = self.sheets.clear_rides_with(
+                    tg_ids={tg_id},
+                    names=passenger_names,
+                )
+            except Exception as e:
+                await self.log_admin(
+                    context,
+                    "Exception while clearing rides_with",
+                    str(e)[-1500:],
+                    update,
+                )
+
+            # Удаляем строки из drivers и drivers_passengers
+            self.sheets.delete_driver(tg_id)
+            self.sheets.delete_driver_passengers(tg_id)
 
             await self.log_admin(
-                context, "Driver deleted", f"tg_id={tg_id}", update,
+                context,
+                "Driver stopped being driver",
+                f"tg_id={tg_id}\npassengers={len(passenger_names)}\ncleared_rides_with_rows={cleared}",
+                update,
             )
             await update.message.reply_text(
-                "Запись удалена.",
+                "✅ Готово! Ты больше не водитель.\n"
+                "Теперь тебя можно добавить пассажиром 😉",
                 reply_markup=self.kb_main(),
             )
         else:
             await update.message.reply_text(
-                "Отменено.",
+                "Ок, ничего не меняю.",
                 reply_markup=self.kb_main(),
             )
 
@@ -236,13 +270,18 @@ class BotHandlers:
         tg_id = update.effective_user.id
         if not self.sheets.get_driver(tg_id):
             await update.message.reply_text(
-                "Сначала нужно создать запись водителя.",
+                "Сначала нужно стать водителем.\n"
+                "Нажми «🚗 Стать водителем» и заполни данные.",
                 reply_markup=self.kb_main(),
             )
             return ConversationHandler.END
 
         await update.message.reply_text(
-            "Введи пассажиров (каждого с новой строки, максимум 4)."
+            "Введи пассажиров (каждого с новой строки), максимум *4*.\n\n"
+            "Пример:\n"
+            "`Иван Петров`\n"
+            "`Мария Иванова`",
+            parse_mode="Markdown",
         )
         return ST_ADD_PASSENGERS
 
@@ -254,11 +293,11 @@ class BotHandlers:
             if x.strip()
         ]
 
-        valid, errors = self.sheets.validate_passengers(tg_id, names)
+        valid, errors, warnings = self.sheets.validate_passengers(tg_id, names)
 
         if errors:
             await update.message.reply_text(
-                "\n".join(errors),
+                "\n\n".join(errors),
                 reply_markup=self.kb_main(),
             )
             return ConversationHandler.END
@@ -277,9 +316,15 @@ class BotHandlers:
             update,
         )
         await update.message.reply_text(
-            "Пассажиры сохранены.",
+            "✅ Пассажиры сохранены.",
             reply_markup=self.kb_main(),
         )
+
+        if warnings:
+            await update.message.reply_text(
+                "ℹ️ Некоторые пункты я пропустил:\n\n" + "\n\n".join(warnings),
+                reply_markup=self.kb_main(),
+            )
         return ConversationHandler.END
 
     # ======================================================
@@ -307,7 +352,7 @@ class BotHandlers:
             one_time_keyboard=True,
         )
         await update.message.reply_text(
-            "Выбери пассажира для удаления:",
+            "Выбери пассажира для удаления (кнопкой ниже):",
             reply_markup=kb,
         )
         return ST_REMOVE_PASSENGER
@@ -370,16 +415,30 @@ class BotHandlers:
         dp = self.sheets.get_driver_passengers(tg_id)
         passengers = dp.passengers if dp else []
 
-        txt = "Weekly проверка.\n\n"
+        txt = "📅 Еженедельная проверка списка пассажиров\n\n"
         txt += "Текущие пассажиры:\n"
         txt += "\n".join(passengers) if passengers else "Нет пассажиров"
         txt += "\n\nВсё актуально?"
 
-        await context.bot.send_message(
-            chat_id=tg_id,
-            text=txt,
-            reply_markup=self.kb_yes_no(),
+        await self.log_admin(
+            context,
+            "Weekly send",
+            f"tg_id={tg_id} shift={shift} passengers={len(passengers)}",
         )
+
+        try:
+            await context.bot.send_message(
+                chat_id=tg_id,
+                text=txt,
+                reply_markup=self.kb_yes_no(),
+            )
+        except Exception as e:
+            await self.log_admin(
+                context,
+                "Weekly send failed",
+                f"tg_id={tg_id} err={str(e)[-1500:]}",
+            )
+            return
 
         state = get_state_manager(self.config.STATE_FILE)
         state.add_pending(tg_id, shift)
@@ -417,6 +476,9 @@ class BotHandlers:
 
         if update.message.text == Buttons.YES:
             state.remove_pending(tg_id)
+            await self.log_admin(
+                context, "Weekly ответ", "✅ Да", update,
+            )
             await update.message.reply_text(
                 "Ок, список оставлен.",
                 reply_markup=self.kb_main(),
@@ -427,6 +489,9 @@ class BotHandlers:
                 dp.passengers = []
                 self.sheets.upsert_driver_passengers(dp)
             state.remove_pending(tg_id)
+            await self.log_admin(
+                context, "Weekly ответ", "❌ Нет (очистка)", update,
+            )
             await update.message.reply_text(
                 "Список очищен.",
                 reply_markup=self.kb_main(),
@@ -437,8 +502,17 @@ class BotHandlers:
     # ======================================================
 
     async def admin_weekly_start(self, update, context):
+        # доступ только админам
+        uid = update.effective_user.id
+        if uid not in (self.config.ADMIN_USER_IDS or []):
+            await update.message.reply_text(
+                "⛔ Эта команда доступна только администраторам.",
+                reply_markup=self.kb_main(),
+            )
+            return ConversationHandler.END
+
         await update.message.reply_text(
-            "Выбери режим:",
+            "Админка: точечная weekly-проверка.\n\nВыбери режим:",
             reply_markup=ReplyKeyboardMarkup(
                 [
                     [Buttons.ADMIN_MODE_TGID],
@@ -454,7 +528,11 @@ class BotHandlers:
         txt = update.message.text
 
         if txt == Buttons.ADMIN_MODE_TGID:
-            await update.message.reply_text("Введи TGID:")
+            await update.message.reply_text(
+                "Введи Telegram ID водителя (число).\n"
+                "Пример: `123456789`",
+                parse_mode="Markdown",
+            )
             return ST_ADMIN_TGID
 
         if txt == Buttons.ADMIN_MODE_SHIFT:
@@ -474,7 +552,8 @@ class BotHandlers:
 
         if not raw.isdigit():
             await update.message.reply_text(
-                "TGID должен быть числом.",
+                "TGID должен быть числом.\nПример: `123456789`",
+                parse_mode="Markdown",
                 reply_markup=self.kb_main(),
             )
             return ConversationHandler.END
