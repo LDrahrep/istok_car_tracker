@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 import gspread
+import difflib
 from google.oauth2.service_account import Credentials
 
 from models import (
@@ -425,11 +426,19 @@ class SheetManager:
 
         driver_name_norm = normalize_text(driver_emp.name) if driver_emp else ""
 
+        all_employees = [e for e in self.get_all_employees() if e.name]
+
         employees = {
             normalize_text(e.name): e
-            for e in self.get_all_employees()
-            if e.name
+            for e in all_employees
         }
+
+        # кандидаты для подсказок: только сотрудники той же смены, что и водитель
+        same_shift_names = [
+            e.name
+            for e in all_employees
+            if ShiftType.from_string(e.shift) == driver_shift
+        ]
 
         seen = set()
 
@@ -442,11 +451,24 @@ class SheetManager:
             emp = employees.get(n)
 
             if not emp:
-                warnings.append(
-                    f"😕 Не найден сотрудник: {raw} — пропущен.\n"
-                    "Проверь написание (как в employees)."
+                # Подсказки похожих имён (только в той же смене)
+                suggestions = difflib.get_close_matches(
+                    raw.strip(),
+                    same_shift_names,
+                    n=3,
+                    cutoff=0.68,
                 )
+
+                if suggestions:
+                    warnings.append(
+                        f"• {raw}: сотрудника еще не добавили. Возможно, ты имел в виду: "
+                        + ", ".join(suggestions)
+                    )
+                else:
+                    warnings.append(f"• {raw}: сотрудника еще не добавили.")
+
                 continue
+
 
             # запрет водитель = пассажир
             if (
@@ -463,21 +485,28 @@ class SheetManager:
             p_shift = ShiftType.from_string(emp.shift)
 
             if p_shift != driver_shift:
-                warnings.append(
-                    f"⏰ {emp.name} в другой смене — пропущен."
-                )
+                warnings.append(f"• {emp.name}: сотрудник в другой смене.")
                 continue
 
             valid.append(emp)
 
         if len(valid) > 4:
-            warnings.append("⚠️ Максимум 4 пассажира — лишние будут проигнорированы.")
+            warnings.append("• Максимум 4 пассажира — лишние будут проигнорированы.")
             valid = valid[:4]
 
         if not valid:
-            errors.append(
-                "⛔ Не получилось добавить пассажиров: после проверок список пуст.\n"
-                "Проверь имена и смену сотрудников."
+            # Никого не добавили — покажем причины максимально понятно
+            msg = (
+                "❌ Никого не удалось добавить.\n\n"
+                "Возможные причины:\n"
+                "• сотрудника еще не добавили\n"
+                "• сотрудник в другой смене\n\n"
             )
+
+            if warnings:
+                msg += "Что именно не подошло:\n" + "\n".join(warnings)
+
+            errors.append(msg)
+
 
         return valid, errors, warnings
