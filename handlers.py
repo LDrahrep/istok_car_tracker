@@ -65,15 +65,21 @@ class BotHandlers:
         except Exception:
             pass
 
-    def kb_main(self):
+    def kb_main(self, user_id: int | None = None):
+        keyboard = [
+            [Buttons.BECOME_DRIVER, Buttons.ADD_PASSENGERS],
+            [Buttons.MY_RECORD, Buttons.STOP_BEING_DRIVER],
+            [Buttons.REMOVE_PASSENGER],
+        ]
+
+        # Админскую кнопку показываем только администраторам
+        if user_id is not None and user_id in self.config.ADMIN_USER_IDS:
+            keyboard.append([Buttons.ADMIN_WEEKLY_TARGET])
+
+        keyboard.append([Buttons.CANCEL])
+
         return ReplyKeyboardMarkup(
-            [
-                [Buttons.BECOME_DRIVER, Buttons.ADD_PASSENGERS],
-                [Buttons.MY_RECORD, Buttons.STOP_BEING_DRIVER],
-                [Buttons.REMOVE_PASSENGER],
-                [Buttons.ADMIN_WEEKLY_TARGET],
-                [Buttons.CANCEL],
-            ],
+            keyboard,
             resize_keyboard=True,
         )
 
@@ -105,14 +111,14 @@ class BotHandlers:
         await update.message.reply_text(
             "Привет! Я помогу вести список водителей и пассажиров.\n\n"
             "Выбери действие кнопками ниже:",
-            reply_markup=self.kb_main(),
+            reply_markup=self.kb_main(update.effective_user.id),
         )
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         await update.message.reply_text(
             "Ок, отменил 👍",
-            reply_markup=self.kb_main(),
+            reply_markup=self.kb_main(update.effective_user.id),
         )
         return ConversationHandler.END
 
@@ -137,7 +143,7 @@ class BotHandlers:
                 "Проверь написание *точно как в employees*.\n"
                 "Пример: `Ivan Ivanov`",
                 parse_mode="Markdown",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
 
@@ -149,7 +155,7 @@ class BotHandlers:
                 "Попроси водителя нажать кнопку «🧑‍🤝‍🧑 Удалить пассажира» и удалить тебя из списка.\n\n"
                 "После этого ты сможешь стать водителем 🚗",
                 parse_mode="Markdown",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
 
@@ -170,7 +176,7 @@ class BotHandlers:
                 "Сначала попроси водителя удалить тебя кнопкой «🧑‍🤝‍🧑 Удалить пассажира».\n\n"
                 "После этого ты сможешь стать водителем 🚗",
                 parse_mode="Markdown",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
 
@@ -205,7 +211,7 @@ class BotHandlers:
         await update.message.reply_text(
             "✅ Запись водителя сохранена.\n"
             "Теперь можешь добавить пассажиров кнопкой «👥 Добавить пассажиров».",
-            reply_markup=self.kb_main(),
+            reply_markup=self.kb_main(update.effective_user.id),
         )
         return ConversationHandler.END
 
@@ -220,7 +226,7 @@ class BotHandlers:
         if not driver:
             await update.message.reply_text(
                 "У тебя нет записи водителя.",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
             return
 
@@ -240,7 +246,7 @@ class BotHandlers:
         else:
             txt += "👥 Пассажиры: нет"
 
-        await update.message.reply_text(txt, reply_markup=self.kb_main())
+        await update.message.reply_text(txt, reply_markup=self.kb_main(update.effective_user.id))
 
     # ======================================================
     # Stop being driver
@@ -251,7 +257,7 @@ class BotHandlers:
         if not self.sheets.get_driver(tg_id):
             await update.message.reply_text(
                 "У тебя нет записи водителя.",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
 
@@ -298,12 +304,12 @@ class BotHandlers:
             await update.message.reply_text(
                 "✅ Готово! Ты больше не водитель.\n"
                 "Теперь тебя можно добавить пассажиром 😉",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
         else:
             await update.message.reply_text(
                 "Ок, ничего не меняю.",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
 
         return ConversationHandler.END
@@ -318,7 +324,7 @@ class BotHandlers:
             await update.message.reply_text(
                 "Сначала нужно стать водителем.\n"
                 "Нажми «🚗 Стать водителем» и заполни данные.",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
 
@@ -344,7 +350,7 @@ class BotHandlers:
         if errors:
             await update.message.reply_text(
                 "\n\n".join(errors),
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
 
@@ -378,7 +384,7 @@ class BotHandlers:
 
         await update.message.reply_text(
             "\n\n".join(parts),
-            reply_markup=self.kb_main(),
+            reply_markup=self.kb_main(update.effective_user.id),
         )
         return ConversationHandler.END
 
@@ -393,7 +399,7 @@ class BotHandlers:
         if not dp or not dp.passengers:
             await update.message.reply_text(
                 "У тебя нет пассажиров.",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
 
@@ -421,7 +427,7 @@ class BotHandlers:
         if not dp:
             await update.message.reply_text(
                 "Нет данных о пассажирах.",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
 
@@ -434,7 +440,7 @@ class BotHandlers:
         if not match:
             await update.message.reply_text(
                 "Пассажир не найден — попробуй снова.",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
 
@@ -451,12 +457,12 @@ class BotHandlers:
             remaining = "\n".join(f"  {i+1}. {p}" for i, p in enumerate(dp.passengers))
             await update.message.reply_text(
                 f"Пассажир «{match}» удалён.\n\nОставшиеся:\n{remaining}",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
         else:
             await update.message.reply_text(
                 f"Пассажир «{match}» удалён. Список пассажиров пуст.",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
 
         context.user_data.pop("passengers_to_remove_from", None)
@@ -536,7 +542,7 @@ class BotHandlers:
             )
             await update.message.reply_text(
                 "Ок, список оставлен.",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
         else:
             dp = self.sheets.get_driver_passengers(tg_id)
@@ -549,7 +555,7 @@ class BotHandlers:
             )
             await update.message.reply_text(
                 "Список очищен.",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
 
     # ======================================================
@@ -562,7 +568,7 @@ class BotHandlers:
         if uid not in (self.config.ADMIN_USER_IDS or []):
             await update.message.reply_text(
                 "⛔ Эта команда доступна только администраторам.",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
 
@@ -609,7 +615,7 @@ class BotHandlers:
             await update.message.reply_text(
                 "TGID должен быть числом.\nПример: `123456789`",
                 parse_mode="Markdown",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
 
@@ -618,7 +624,7 @@ class BotHandlers:
         if not self.sheets.get_driver(tg_id):
             await update.message.reply_text(
                 f"Водитель с TGID {tg_id} не найден.",
-                reply_markup=self.kb_main(),
+                reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
 
@@ -631,7 +637,7 @@ class BotHandlers:
         )
         await update.message.reply_text(
             f"Weekly отправлен водителю {tg_id}.",
-            reply_markup=self.kb_main(),
+            reply_markup=self.kb_main(update.effective_user.id),
         )
         return ConversationHandler.END
 
@@ -664,6 +670,6 @@ class BotHandlers:
         )
         await update.message.reply_text(
             f"Weekly отправлен {len(tgids)} водителям смены {shift.value}.",
-            reply_markup=self.kb_main(),
+            reply_markup=self.kb_main(update.effective_user.id),
         )
         return ConversationHandler.END
