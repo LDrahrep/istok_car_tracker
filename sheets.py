@@ -524,8 +524,8 @@ class SheetManager:
 
         if driver_shift == ShiftType.UNKNOWN:
             errors.append(
-                "⛔ У тебя не указана смена в таблице drivers (колонка Shift).\n"
-                "Попроси администратора обновить данные."
+                "⛔ У тебя не указана смена.\n"
+                "Обратись к администратору."
             )
             return [], errors, warnings
 

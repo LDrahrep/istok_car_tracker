@@ -185,7 +185,7 @@ class BotHandlers:
     async def become_driver_start(self, update, context):
         await self._reply(
             update,
-            "Напиши имя и фамилию как в таблице сотрудников (employees).\n"
+            "Напиши имя и фамилию.\n"
             "Пример: Ivan Ivanov",
         )
         return ST_DRIVER_NAME
@@ -198,7 +198,7 @@ class BotHandlers:
             await self._reply(
                 update,
                 "Сотрудник не найден 😕\n"
-                "Проверь написание точно как в employees.\n"
+                "Проверь написание имени и фамилии.\n"
                 "Пример: Ivan Ivanov",
                 reply_markup=self.kb_main(update.effective_user.id),
             )
@@ -208,8 +208,8 @@ class BotHandlers:
         if self._is_real_passenger_emp(emp):
             await self._reply(
                 update,
-                "Похоже, сейчас ты пассажир (rides_with заполнен).\n\n"
-                f"Сначала тебя нужно убрать из пассажиров у водителя: {emp.rides_with.strip()}.\n"
+                "Похоже, сейчас ты записан как пассажир.\n\n"
+                f"Сначала тебя нужно убрать из списка водителя: {emp.rides_with.strip()}.\n"
                 "Попроси водителя нажать кнопку «🧑‍🤝‍🧑 Удалить пассажира» и удалить тебя из списка.\n\n"
                 "После этого ты сможешь стать водителем 🚗",
                 reply_markup=self.kb_main(update.effective_user.id),
@@ -662,7 +662,7 @@ class BotHandlers:
 
         await self._reply(
             update,
-            "Админка: точечная weekly-проверка.\n\nВыбери режим:",
+            "Точечная проверка пассажиров.\n\nВыбери режим:",
             reply_markup=ReplyKeyboardMarkup(
                 [
                     [Buttons.ADMIN_MODE_TGID],
@@ -700,7 +700,7 @@ class BotHandlers:
         if not raw.isdigit():
             await self._reply(
                 update,
-                "TGID должен быть числом.\nПример: 123456789",
+                "Telegram ID должен быть числом.\nПример: 123456789",
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
@@ -710,7 +710,7 @@ class BotHandlers:
         if not self.sheets.get_driver(tg_id):
             await self._reply(
                 update,
-                f"Водитель с TGID {tg_id} не найден.",
+                f"Водитель с Telegram ID {tg_id} не найден.",
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
@@ -724,7 +724,7 @@ class BotHandlers:
         )
         await self._reply(
             update,
-            f"Weekly отправлен водителю {tg_id}.",
+            f"Проверка отправлена водителю (ID: {tg_id}).",
             reply_markup=self.kb_main(update.effective_user.id),
         )
         return ConversationHandler.END
@@ -744,7 +744,7 @@ class BotHandlers:
             await self.log_admin(context, "Admin weekly by shift failed", "telegramID column not found")
             await self._reply(
                 update,
-                "Не могу найти колонку telegramID в drivers_passengers.",
+                "Произошла ошибка. Обратись к администратору.",
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
@@ -767,7 +767,7 @@ class BotHandlers:
         )
         await self._reply(
             update,
-            f"Weekly отправлен {len(tgids)} водителям смены {shift.value}.",
+            f"Проверка отправлена {len(tgids)} водителям ({shift.to_display()}).",
             reply_markup=self.kb_main(update.effective_user.id),
         )
         return ConversationHandler.END
