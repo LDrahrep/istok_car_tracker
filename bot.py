@@ -5,6 +5,10 @@ import re
 
 from admin_log import format_exception
 
+from telegram import Update
+from telegram.ext import ContextTypes
+from telegram.request import HTTPXRequest
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -41,9 +45,16 @@ def build_app():
     sheets = SheetManager(config)
     handlers = BotHandlers(config, sheets)
 
+    request = HTTPXRequest(
+        connect_timeout=20.0,
+        read_timeout=120.0,     # важно для long-polling
+        write_timeout=20.0,
+        pool_timeout=20.0,
+    )
+
     app = Application.builder().token(
         config.TELEGRAM_BOT_TOKEN
-    ).build()
+    ).request(request).build()
 
     async def on_error(update, context):
         # Любые исключения логируем в админский чат (best-effort)
@@ -64,6 +75,40 @@ def build_app():
             pass
 
     app.add_error_handler(on_error)
+
+
+async def log_incoming_railway(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Log every incoming update to Railway logs (console).
+
+    We intentionally do NOT spam the admin chat with every message.
+    Important events are already sent via handlers.log_admin(...) and on_error.
+    """
+    u = update.effective_user
+    c = update.effective_chat
+    if not u:
+        return
+
+    payload = ""
+    if update.message and update.message.text:
+        payload = update.message.text
+    elif update.callback_query and update.callback_query.data:
+        payload = f"[callback] {update.callback_query.data}"
+    else:
+        payload = "[non-text update]"
+
+    logger.info(
+        "INCOMING uid=%s username=@%s name=%s chat_id=%s chat_type=%s payload=%r",
+        u.id,
+        u.username or "",
+        u.full_name,
+        c.id if c else None,
+        c.type if c else None,
+        payload,
+    )
+
+    # ВАЖНО: group=-1 чтобы логировать до ConversationHandler
+    app.add_handler(MessageHandler(filters.ALL, log_incoming_railway), group=-1)
+
 
     conv = ConversationHandler(
         entry_points=[
@@ -152,9 +197,12 @@ def build_app():
         )
     )
 
+    # Ловим всё, что не обработалось другими хендлерами
+    app.add_handler(MessageHandler(filters.ALL, handlers.unknown), group=99)
+
     return app
 
 
 if __name__ == "__main__":
     application = build_app()
-    application.run_polling()
+    application.run_polling(drop_pending_updates=True, allowed_updates=None)
