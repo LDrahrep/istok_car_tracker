@@ -420,6 +420,13 @@ class BotHandlers:
         )
         self.sheets.upsert_driver_passengers(dp)
 
+        # Записываем в employees: Rides with и telegramID для пассажиров
+        self.sheets.assign_passengers_to_driver(
+            driver_tgid=tg_id,
+            driver_name=driver.name,
+            passenger_names=[e.name for e in valid],
+        )
+
         await self.log_admin(
             context, "Passengers updated",
             f"Driver {driver.name}\n" + "\n".join([e.name for e in valid]),

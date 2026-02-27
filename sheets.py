@@ -342,6 +342,61 @@ class SheetManager:
         self._invalidate(self.config.EMPLOYEES_SHEET)
         return len(updates)
 
+    def assign_passengers_to_driver(
+        self,
+        driver_tgid: int,
+        driver_name: str,
+        passenger_names: list[str],
+    ) -> int:
+        """Записать в employees.Rides_with и employees.telegramID данные водителя
+        для каждого пассажира (по имени). Также записывает водителя самого к себе.
+
+        Возвращает число обновлённых строк.
+        """
+        names_to_assign = {normalize_text(n) for n in passenger_names if n}
+        # Водитель тоже приписывается к себе
+        names_to_assign.add(normalize_text(driver_name))
+
+        values = self._values(self.config.EMPLOYEES_SHEET)
+        if not values or len(values) < 2:
+            return 0
+
+        headers = values[0]
+        col = self._col_map(headers)
+
+        name_col = col.get("Employee") or col.get("Name")
+        rides_col = col.get("Rides with")
+        tg_col = col.get("telegramID") or col.get("telegramid")
+
+        if name_col is None or rides_col is None or tg_col is None:
+            return 0
+
+        ws = self._ws(self.config.EMPLOYEES_SHEET)
+        updates = []
+
+        for idx, row in enumerate(values[1:], start=2):
+            row_name = ""
+            if name_col < len(row):
+                row_name = str(row[name_col] or "")
+
+            if not row_name or normalize_text(row_name) not in names_to_assign:
+                continue
+
+            # Записываем Rides with = имя водителя
+            rides_letter = chr(ord('A') + rides_col)
+            updates.append({"range": f"{rides_letter}{idx}", "values": [[driver_name]]})
+
+            # Записываем telegramID = ID водителя
+            tg_letter = chr(ord('A') + tg_col)
+            updates.append({"range": f"{tg_letter}{idx}", "values": [[str(driver_tgid)]]})
+
+        if not updates:
+            return 0
+
+        ws.batch_update(updates)
+        self._invalidate(self.config.EMPLOYEES_SHEET)
+        return len(updates) // 2  # каждый сотрудник = 2 обновления
+
     # =========================
     # Passenger lookup
     # =========================
@@ -409,22 +464,39 @@ class SheetManager:
     def validate_passengers(
         self, driver_tgid: int, names: list[str]
     ) -> tuple[list[Employee], list[str], list[str]]:
+        """Валидация пассажиров.
 
+        ВАЖНО: в employees.telegramID хранится ID ВОДИТЕЛЯ (не сотрудника).
+        Поэтому смену водителя берём из таблицы drivers, а проверку
+        «водитель = пассажир» делаем ТОЛЬКО по имени.
+
+        Критерии добавления пассажира:
+        1. Сотрудник существует в employees
+        2. Одна смена с водителем (Day/Meltech = одно)
+        3. employees.telegramID и Rides with пустые (свободен)
+        4. Если telegramID = ID этого водителя → уже приписан к тебе
+        5. Если занят другим водителем → ошибка
+        """
         errors: list[str] = []
         warnings: list[str] = []
         valid: list[Employee] = []
+        already_assigned: list[str] = []
 
-        driver_emp = self.get_employee_by_tgid(driver_tgid)
-        driver_shift = self.get_shift_for_tgid(driver_tgid)
+        # Смену водителя берём из таблицы drivers (там Shift точно его)
+        driver_record = self.get_driver(driver_tgid)
+        if not driver_record:
+            errors.append("⛔ Ты не зарегистрирован как водитель.")
+            return [], errors, warnings
+
+        driver_shift = ShiftType.from_string(driver_record.shift)
+        driver_name_norm = normalize_text(driver_record.name)
 
         if driver_shift == ShiftType.UNKNOWN:
             errors.append(
-                "⛔ У тебя не указана смена в списке сотрудников (employees → Shift).\n"
-                "Попроси обновить смену или напиши администратору."
+                "⛔ У тебя не указана смена в таблице drivers (колонка Shift).\n"
+                "Попроси администратора обновить данные."
             )
             return [], errors, warnings
-
-        driver_name_norm = normalize_text(driver_emp.name) if driver_emp else ""
 
         all_employees = [e for e in self.get_all_employees() if e.name]
 
@@ -433,7 +505,7 @@ class SheetManager:
             for e in all_employees
         }
 
-        # кандидаты для подсказок: только сотрудники той же смены, что и водитель
+        # кандидаты для подсказок: только сотрудники той же смены
         same_shift_names = [
             e.name
             for e in all_employees
@@ -451,14 +523,12 @@ class SheetManager:
             emp = employees.get(n)
 
             if not emp:
-                # Подсказки похожих имён (только в той же смене)
                 suggestions = difflib.get_close_matches(
                     raw.strip(),
                     same_shift_names,
                     n=3,
                     cutoff=0.68,
                 )
-
                 if suggestions:
                     warnings.append(
                         f"• {raw}: сотрудника еще не добавили. Возможно, ты имел в виду: "
@@ -466,15 +536,10 @@ class SheetManager:
                     )
                 else:
                     warnings.append(f"• {raw}: сотрудника еще не добавили.")
-
                 continue
 
-
-            # запрет водитель = пассажир
-            if (
-                (emp.tg_id and int(emp.tg_id) == int(driver_tgid))
-                or n == driver_name_norm
-            ):
+            # Водитель не может быть пассажиром (сравниваем по имени)
+            if n == driver_name_norm:
                 warnings.append(
                     "🙃 Водитель не может быть пассажиром — этот пункт пропущен.\n"
                     "Если ты больше не водитель, нажми «🛑 Перестать быть водителем», "
@@ -482,10 +547,28 @@ class SheetManager:
                 )
                 continue
 
+            # Проверка смены
             p_shift = ShiftType.from_string(emp.shift)
-
             if p_shift != driver_shift:
                 warnings.append(f"• {emp.name}: сотрудник в другой смене.")
+                continue
+
+            # Проверка занятости: employees.telegramID и Rides with
+            rides_with = (emp.rides_with or "").strip()
+            has_driver_id = emp.tg_id is not None
+
+            if rides_with or has_driver_id:
+                # Уже приписан к кому-то
+                is_mine = (
+                    (emp.tg_id is not None and int(emp.tg_id) == int(driver_tgid))
+                    or normalize_text(rides_with) == driver_name_norm
+                )
+                if is_mine:
+                    already_assigned.append(emp.name)
+                else:
+                    warnings.append(
+                        f"• {emp.name}: уже записан к другому водителю ({rides_with})."
+                    )
                 continue
 
             valid.append(emp)
@@ -494,18 +577,29 @@ class SheetManager:
             warnings.append("• Максимум 4 пассажира — лишние будут проигнорированы.")
             valid = valid[:4]
 
-        if not valid:
-            # Никого не добавили — покажем причины максимально понятно
+        # Все пассажиры уже приписаны к этому водителю
+        if not valid and already_assigned and not warnings:
+            errors.append(
+                "ℹ️ Все указанные пассажиры уже приписаны к тебе:\n"
+                + "\n".join(f"• {name}" for name in already_assigned)
+            )
+            return [], errors, []
+
+        # Часть приписана, часть новая
+        if already_assigned:
+            for name in already_assigned:
+                warnings.append(f"• {name}: уже приписан к тебе.")
+
+        if not valid and not already_assigned:
             msg = (
                 "❌ Никого не удалось добавить.\n\n"
                 "Возможные причины:\n"
                 "• сотрудника еще не добавили\n"
-                "• сотрудник в другой смене\n\n"
+                "• сотрудник в другой смене\n"
+                "• сотрудник уже записан к другому водителю\n\n"
             )
-
             if warnings:
                 msg += "Что именно не подошло:\n" + "\n".join(warnings)
-
             errors.append(msg)
 
 

@@ -91,6 +91,7 @@ class Driver:
     tg_id: int
     car: str = ""
     plates: str = ""
+    shift: str = ""
     is_active: bool = True
 
     @staticmethod
@@ -106,6 +107,7 @@ class Driver:
             tg_id=int(tg_raw),
             car=row.get("Car") or "",
             plates=row.get("Plates") or "",
+            shift=row.get("Shift") or "",
             is_active=is_active_raw != "false",
         )
 
