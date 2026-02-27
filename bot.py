@@ -188,6 +188,9 @@ def build_app():
         )
     )
 
+    # Админская команда: разослать обновлённую клавиатуру всем
+    app.add_handler(CommandHandler("broadcast_keyboard", handlers.broadcast_keyboard))
+
     # Weekly YES/NO ответы
     app.add_handler(
         MessageHandler(

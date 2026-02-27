@@ -753,3 +753,39 @@ class BotHandlers:
             reply_markup=self.kb_main(update.effective_user.id),
         )
         return ConversationHandler.END
+
+    # ======================================================
+    # Broadcast keyboard (admin only)
+    # ======================================================
+
+    async def broadcast_keyboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Отправить всем сотрудникам с telegramID сообщение с обновлённой клавиатурой."""
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+
+        employees = self.sheets.get_all_employees()
+        sent = 0
+        failed = 0
+
+        for emp in employees:
+            if not emp.tg_id:
+                continue
+            try:
+                tg_id = int(emp.tg_id)
+                await context.bot.send_message(
+                    chat_id=tg_id,
+                    text="🔄 Бот обновлён! Клавиатура обновлена.\n"
+                         "Используй кнопки ниже:",
+                    reply_markup=self.kb_main(tg_id),
+                )
+                sent += 1
+            except Exception:
+                failed += 1
+
+        await self._reply(
+            update,
+            f"✅ Клавиатура отправлена: {sent} пользователям.\n"
+            f"{'❌ Не удалось: ' + str(failed) if failed else ''}",
+            reply_markup=self.kb_main(uid),
+        )
