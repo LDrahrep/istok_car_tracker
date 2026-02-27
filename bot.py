@@ -199,28 +199,11 @@ def build_app():
         )
     )
 
-    # Ловим только текст, который не обработался другими хендлерами
-    # (исключаем команды и известные кнопки, чтобы не дублировать ответы)
-    _known_buttons = filters.Regex("|".join(
-        re.escape(b) for b in [
-            Buttons.BECOME_DRIVER,
-            Buttons.ADD_PASSENGERS,
-            Buttons.REMOVE_PASSENGER,
-            Buttons.MY_RECORD,
-            Buttons.STOP_BEING_DRIVER,
-            Buttons.CANCEL,
-            Buttons.YES,
-            Buttons.NO,
-            Buttons.ADMIN_WEEKLY_TARGET,
-        ]
-    ))
-    app.add_handler(
-        MessageHandler(
-            filters.ALL & ~filters.COMMAND & ~_known_buttons,
-            handlers.unknown,
-        ),
-        group=99,
-    )
+    # Ловим всё, что не обработалось ни одним хендлером выше.
+    # ВАЖНО: группа 0 (по умолчанию), НЕ отдельная группа!
+    # В одной группе python-telegram-bot останавливается на первом совпадении,
+    # поэтому если ConversationHandler обработал — unknown НЕ сработает.
+    app.add_handler(MessageHandler(filters.ALL, handlers.unknown))
 
     return app
 
