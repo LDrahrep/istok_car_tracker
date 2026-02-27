@@ -331,7 +331,12 @@ class BotHandlers:
             dp = self.sheets.get_driver_passengers(tg_id)
             passenger_names = set(dp.passengers) if dp else set()
 
-            # Очищаем employees.rides_with у пассажиров и у самого водителя
+            # ВАЖНО: сначала удаляем из drivers_passengers (source of truth),
+            # чтобы Apps Script syncEmployeesAll не вернул данные обратно.
+            self.sheets.delete_driver_passengers(tg_id)
+            self.sheets.delete_driver(tg_id)
+
+            # Теперь очищаем employees (Rides with + telegramID)
             cleared = 0
             try:
                 cleared = self.sheets.clear_rides_with(
@@ -345,10 +350,6 @@ class BotHandlers:
                     str(e)[-1500:],
                     update,
                 )
-
-            # Удаляем строки из drivers и drivers_passengers
-            self.sheets.delete_driver(tg_id)
-            self.sheets.delete_driver_passengers(tg_id)
 
             await self.log_admin(
                 context,
