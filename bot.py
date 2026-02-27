@@ -76,35 +76,34 @@ def build_app():
 
     app.add_error_handler(on_error)
 
+    async def log_incoming_railway(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Log every incoming update to Railway logs (console).
 
-async def log_incoming_railway(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Log every incoming update to Railway logs (console).
+        We intentionally do NOT spam the admin chat with every message.
+        Important events are already sent via handlers.log_admin(...) and on_error.
+        """
+        u = update.effective_user
+        c = update.effective_chat
+        if not u:
+            return
 
-    We intentionally do NOT spam the admin chat with every message.
-    Important events are already sent via handlers.log_admin(...) and on_error.
-    """
-    u = update.effective_user
-    c = update.effective_chat
-    if not u:
-        return
+        payload = ""
+        if update.message and update.message.text:
+            payload = update.message.text
+        elif update.callback_query and update.callback_query.data:
+            payload = f"[callback] {update.callback_query.data}"
+        else:
+            payload = "[non-text update]"
 
-    payload = ""
-    if update.message and update.message.text:
-        payload = update.message.text
-    elif update.callback_query and update.callback_query.data:
-        payload = f"[callback] {update.callback_query.data}"
-    else:
-        payload = "[non-text update]"
-
-    logger.info(
-        "INCOMING uid=%s username=@%s name=%s chat_id=%s chat_type=%s payload=%r",
-        u.id,
-        u.username or "",
-        u.full_name,
-        c.id if c else None,
-        c.type if c else None,
-        payload,
-    )
+        logger.info(
+            "INCOMING uid=%s username=@%s name=%s chat_id=%s chat_type=%s payload=%r",
+            u.id,
+            u.username or "",
+            u.full_name,
+            c.id if c else None,
+            c.type if c else None,
+            payload,
+        )
 
     # ВАЖНО: group=-1 чтобы логировать до ConversationHandler
     app.add_handler(MessageHandler(filters.ALL, log_incoming_railway), group=-1)
