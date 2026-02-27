@@ -517,6 +517,9 @@ class BotHandlers:
         dp.passengers.remove(match)
         self.sheets.upsert_driver_passengers(dp)
 
+        # Очищаем Rides with и telegramID для удалённого пассажира в employees
+        self.sheets.clear_rides_with(names={match})
+
         await self.log_admin(
             context, "Passenger removed",
             f"Driver tg_id={tg_id}, removed={match}", update,
@@ -592,8 +595,12 @@ class BotHandlers:
 
         dp = self.sheets.get_driver_passengers(tg_id)
         if dp:
+            old_passengers = dp.passengers[:]
             dp.passengers = []
             self.sheets.upsert_driver_passengers(dp)
+            # Очищаем Rides with и telegramID пассажиров в employees
+            if old_passengers:
+                self.sheets.clear_rides_with(names=set(old_passengers))
 
         state.remove_pending(tg_id)
         await self.log_admin(
@@ -620,8 +627,12 @@ class BotHandlers:
         else:
             dp = self.sheets.get_driver_passengers(tg_id)
             if dp:
+                old_passengers = dp.passengers[:]
                 dp.passengers = []
                 self.sheets.upsert_driver_passengers(dp)
+                # Очищаем Rides with и telegramID пассажиров в employees
+                if old_passengers:
+                    self.sheets.clear_rides_with(names=set(old_passengers))
             state.remove_pending(tg_id)
             await self.log_admin(
                 context, "Weekly ответ", "❌ Нет (очистка)", update,
@@ -766,20 +777,23 @@ class BotHandlers:
     # ======================================================
 
     async def broadcast_keyboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Отправить всем сотрудникам с telegramID сообщение с обновлённой клавиатурой."""
+        """Отправить всем ВОДИТЕЛЯМ сообщение с обновлённой клавиатурой.
+
+        Используем таблицу drivers — там telegramID это настоящий ID водителя.
+        В employees.telegramID хранится ID водителя (не сотрудника), поэтому
+        employees не подходит для рассылки.
+        """
         uid = update.effective_user.id
         if uid not in self.config.ADMIN_USER_IDS:
             return
 
-        employees = self.sheets.get_all_employees()
+        # Берём уникальные telegramID из таблицы drivers
+        driver_tg_ids = self.sheets.get_all_driver_tgids()
         sent = 0
         failed = 0
 
-        for emp in employees:
-            if not emp.tg_id:
-                continue
+        for tg_id in driver_tg_ids:
             try:
-                tg_id = int(emp.tg_id)
                 await context.bot.send_message(
                     chat_id=tg_id,
                     text="🔄 Бот обновлён! Клавиатура обновлена.\n"
@@ -792,7 +806,7 @@ class BotHandlers:
 
         await self._reply(
             update,
-            f"✅ Клавиатура отправлена: {sent} пользователям.\n"
+            f"✅ Клавиатура отправлена: {sent} водителям.\n"
             f"{'❌ Не удалось: ' + str(failed) if failed else ''}",
             reply_markup=self.kb_main(uid),
         )

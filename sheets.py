@@ -102,6 +102,28 @@ class SheetManager:
     # Drivers
     # =========================
 
+    def get_all_driver_tgids(self) -> list[int]:
+        """Получить все уникальные telegramID из таблицы drivers."""
+        values = self._values(self.config.DRIVERS_SHEET)
+        if not values or len(values) < 2:
+            return []
+
+        headers = values[0]
+        col = self._col_map(headers)
+        tg_col = col.get("telegramID")
+        if tg_col is None:
+            return []
+
+        seen = set()
+        result = []
+        for row in values[1:]:
+            if tg_col < len(row):
+                raw = str(row[tg_col]).strip()
+                if raw.isdigit() and raw not in seen:
+                    seen.add(raw)
+                    result.append(int(raw))
+        return result
+
     def get_driver(self, tg_id: int) -> Optional[Driver]:
         values = self._values(self.config.DRIVERS_SHEET)
         if not values or len(values) < 2:
@@ -285,7 +307,10 @@ class SheetManager:
         tg_ids: set[int] | None = None,
         names: set[str] | None = None,
     ) -> int:
-        """Очистить employees.rides_with для заданных сотрудников (по TGID и/или имени).
+        """Очистить employees.Rides with И employees.telegramID для сотрудников.
+
+        Поиск по tg_ids ищет по колонке telegramID (= ID водителя),
+        поиск по names ищет по колонке Employee/Name.
 
         Возвращает число обновлённых строк.
         """
@@ -299,7 +324,6 @@ class SheetManager:
         headers = values[0]
         col = self._col_map(headers)
 
-        # В таблице встречаются разные варианты заголовков
         tg_col = col.get("telegramID") or col.get("telegramid")
         name_col = col.get("Employee") or col.get("Name")
         rides_col = col.get("Rides with")
@@ -309,6 +333,7 @@ class SheetManager:
 
         ws = self._ws(self.config.EMPLOYEES_SHEET)
         updates = []
+        matched = 0
 
         for idx, row in enumerate(values[1:], start=2):
             row_tg = None
@@ -330,17 +355,23 @@ class SheetManager:
             if not match:
                 continue
 
-            # Ставим пустое значение в rides_with
-            col_letter = chr(ord('A') + rides_col)
-            updates.append({"range": f"{col_letter}{idx}", "values": [[""]]})
+            matched += 1
+
+            # Очищаем Rides with
+            rides_letter = chr(ord('A') + rides_col)
+            updates.append({"range": f"{rides_letter}{idx}", "values": [[""]]})
+
+            # Очищаем telegramID
+            if tg_col is not None:
+                tg_letter = chr(ord('A') + tg_col)
+                updates.append({"range": f"{tg_letter}{idx}", "values": [[""]]})
 
         if not updates:
             return 0
 
-        # batch_update устойчивее и быстрее
         ws.batch_update(updates)
         self._invalidate(self.config.EMPLOYEES_SHEET)
-        return len(updates)
+        return matched
 
     def assign_passengers_to_driver(
         self,
