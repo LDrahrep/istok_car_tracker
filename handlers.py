@@ -100,51 +100,50 @@ class BotHandlers:
         return await update.message.reply_text(text, **kwargs)
 
 
-def _throttle(self, context: ContextTypes.DEFAULT_TYPE, key: str, seconds: int) -> bool:
-    """Simple in-memory throttle (stored in application.bot_data).
+    def _throttle(self, context: ContextTypes.DEFAULT_TYPE, key: str, seconds: int) -> bool:
+        """Simple in-memory throttle (stored in application.bot_data).
 
-    Returns True if we are allowed to emit a log now, otherwise False.
-    """
-    now = time.time()
-    store = context.application.bot_data.setdefault("_throttle", {})
-    last = store.get(key, 0.0)
-    if now - last < seconds:
-        return False
-    store[key] = now
-    return True
+        Returns True if we are allowed to emit a log now, otherwise False.
+        """
+        now = time.time()
+        store = context.application.bot_data.setdefault("_throttle", {})
+        last = store.get(key, 0.0)
+        if now - last < seconds:
+            return False
+        store[key] = now
+        return True
 
-async def unknown(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fallback handler for messages not matched by any other handler.
+    async def unknown(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Fallback handler for messages not matched by any other handler.
 
-    We log this to the admin chat (throttled) and show the user a friendly hint.
-    """
-    u = update.effective_user
-    if not u:
-        return
+        We log this to the admin chat (throttled) and show the user a friendly hint.
+        """
+        u = update.effective_user
+        if not u:
+            return
 
-    txt = ""
-    if update.message and update.message.text:
-        txt = update.message.text
+        txt = ""
+        if update.message and update.message.text:
+            txt = update.message.text
 
-    # Антифлуд: не чаще 1 unknown/20сек на пользователя
-    if not self._throttle(context, f"unknown:{u.id}", 20):
-        return
+        # Антифлуд: не чаще 1 unknown/20сек на пользователя
+        if not self._throttle(context, f"unknown:{u.id}", 20):
+            return
 
-    await self.log_admin(
-        context,
-        "Unknown message",
-        f"text={txt!r}"[:1500],
-        update,
-    )
-
-    if update.message:
-        await self._reply(
+        await self.log_admin(
+            context,
+            "Unknown message",
+            f"text={txt!r}"[:1500],
             update,
-            "Я не понял сообщение 🤔\nИспользуй кнопки на клавиатуре или команду /start",
-            reply_markup=self.kb_main(u.id),
         )
 
-    
+        if update.message:
+            await self._reply(
+                update,
+                "Я не понял сообщение 🤔\nИспользуй кнопки на клавиатуре или команду /start",
+                reply_markup=self.kb_main(u.id),
+            )
+
     def _is_real_passenger_emp(self, emp) -> bool:
         """Считать сотрудника пассажиром только если rides_with заполнен И не равен его собственному имени.
         Это позволяет использовать rides_with = своё имя как 'защиту' для водителей.
