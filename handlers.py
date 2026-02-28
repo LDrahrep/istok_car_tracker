@@ -8,7 +8,7 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
 from config import Buttons
-from models import Driver, DriverPassengers, ShiftType
+from models import Driver, DriverPassengers, ShiftType, normalize_text
 from persistence import get_state_manager
 
 
@@ -413,39 +413,73 @@ class BotHandlers:
             )
             return ConversationHandler.END
 
+        # Нет новых валидных пассажиров — НЕ трогаем существующих
+        if not valid:
+            parts = ["ℹ️ Никого не удалось добавить."]
+            if warnings:
+                parts.append("\n".join(f"• {w}" for w in warnings))
+            await self._reply(
+                update,
+                "\n\n".join(parts),
+                reply_markup=self.kb_main(update.effective_user.id),
+            )
+            return ConversationHandler.END
+
         driver = self.sheets.get_driver(tg_id)
+
+        # MERGE: сохраняем существующих пассажиров + добавляем новых
+        existing_dp = self.sheets.get_driver_passengers(tg_id)
+        existing_passengers = existing_dp.passengers if existing_dp else []
+
+        new_names = [e.name for e in valid]
+        merged = list(existing_passengers)
+        existing_norm = {normalize_text(p) for p in merged}
+        for name in new_names:
+            if normalize_text(name) not in existing_norm:
+                merged.append(name)
+
+        if len(merged) > 4:
+            overflow = [n for n in merged[4:] if n in new_names]
+            merged = merged[:4]
+            for name in overflow:
+                warnings.append(f"{name}: не помещается (максимум 4 пассажира).")
+
         dp = DriverPassengers(
             driver_name=driver.name,
             driver_tgid=tg_id,
-            passengers=[e.name for e in valid],
+            passengers=merged,
         )
-        self.sheets.upsert_driver_passengers(dp)
 
-        # Записываем в employees: Rides with и telegramID для пассажиров
-        self.sheets.assign_passengers_to_driver(
-            driver_tgid=tg_id,
-            driver_name=driver.name,
-            passenger_names=[e.name for e in valid],
-        )
+        try:
+            self.sheets.upsert_driver_passengers(dp)
+            self.sheets.assign_passengers_to_driver(
+                driver_tgid=tg_id,
+                driver_name=driver.name,
+                passenger_names=merged,
+            )
+        except Exception as e:
+            await self.log_admin(
+                context, "Sheet write error (add passengers)",
+                str(e)[-1500:], update,
+            )
+            await self._reply(
+                update,
+                "❌ Произошла ошибка при сохранении. Попробуй ещё раз.",
+                reply_markup=self.kb_main(update.effective_user.id),
+            )
+            return ConversationHandler.END
 
         await self.log_admin(
             context, "Passengers updated",
-            f"Driver {driver.name}\n" + "\n".join([e.name for e in valid]),
+            f"Driver {driver.name}\nAll: {', '.join(merged)}\nNew: {', '.join(new_names)}",
             update,
         )
-        # UX: одно итоговое сообщение — кого добавили и кого пропустили
-        added_names = [e.name for e in valid]
         parts = ["✅ Пассажиры сохранены."]
-
-        if added_names:
-            parts.append("👥 Добавлены:\n" + "\n".join([f"• {n}" for n in added_names]))
-        else:
-            parts.append("👥 Никого не добавил (все пункты были пропущены).")
+        parts.append("👥 Добавлены:\n" + "\n".join(f"• {n}" for n in new_names))
 
         if warnings:
-            # warnings уже дружелюбные и с подсказками; оформим списком
             parts.append(
-                "⛔ Пропущены:\n" + "\n".join([f"• {w}" for w in warnings])
+                "⛔ Пропущены:\n" + "\n".join(f"• {w}" for w in warnings)
             )
 
         await self._reply(
