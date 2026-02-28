@@ -44,8 +44,9 @@ class BotHandlers:
         if not self.config.ADMIN_CHAT_ID:
             return
 
-        uid = update.effective_user.id if update else None
-        uname = update.effective_user.username if update else None
+        eu = update.effective_user if update else None
+        uid = eu.id if eu else None
+        uname = eu.username if eu else None
 
         msg = f"🧾 {title}"
         meta = []

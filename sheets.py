@@ -270,6 +270,8 @@ class SheetManager:
         headers = values[0]
         col = self._col_map(headers)
         tg_col = col.get("telegramID")
+        if tg_col is None:
+            return None
 
         for row in values[1:]:
             if tg_col < len(row) and self._cell_eq(row[tg_col], tg_id):
