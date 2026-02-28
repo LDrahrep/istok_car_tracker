@@ -60,6 +60,26 @@ class SheetManager:
         return {h.strip(): i for i, h in enumerate(headers)}
 
     @staticmethod
+    def _col_letter(idx: int) -> str:
+        """0-based index → A1 notation (A, B, ..., Z, AA, AB, ...)."""
+        result = ""
+        while True:
+            result = chr(ord('A') + idx % 26) + result
+            idx = idx // 26 - 1
+            if idx < 0:
+                break
+        return result
+
+    @staticmethod
+    def _col_get(col: dict, *keys):
+        """Get column index, trying keys in order. Safe for index 0."""
+        for k in keys:
+            v = col.get(k)
+            if v is not None:
+                return v
+        return None
+
+    @staticmethod
     def _row_dict(headers, row):
         return {
             headers[i]: row[i] if i < len(row) else ""
@@ -142,6 +162,28 @@ class SheetManager:
 
         return None
 
+    def is_name_taken_by_other_driver(self, name: str, tg_id: int) -> bool:
+        """Проверить, зарегистрировал ли другой водитель (другой tg_id) это имя."""
+        values = self._values(self.config.DRIVERS_SHEET)
+        if not values or len(values) < 2:
+            return False
+
+        headers = values[0]
+        col = self._col_map(headers)
+        name_col = col.get("Name")
+        tg_col = col.get("telegramID")
+        if name_col is None or tg_col is None:
+            return False
+
+        n = normalize_text(name)
+        for row in values[1:]:
+            if name_col < len(row) and normalize_text(row[name_col]) == n:
+                if tg_col < len(row):
+                    raw = str(row[tg_col]).strip()
+                    if raw.isdigit() and int(raw) != tg_id:
+                        return True
+        return False
+
     def upsert_driver(self, driver: Driver):
         values = self._values(self.config.DRIVERS_SHEET)
         if not values:
@@ -150,6 +192,8 @@ class SheetManager:
         headers = values[0]
         col = self._col_map(headers)
         tg_col = col.get("telegramID")
+        if tg_col is None:
+            raise SheetError("telegramID column not found in drivers")
         ws = self._ws(self.config.DRIVERS_SHEET)
 
         existing = None
@@ -167,12 +211,12 @@ class SheetManager:
                 idx = col.get(key)
                 if idx is None:
                     return
-                col_letter = chr(ord('A') + idx)
+                col_letter = SheetManager._col_letter(idx)
                 updates.append({"range": f"{col_letter}{existing}", "values": [[value]]})
 
             put("Name", driver.name)
             # telegramID обязателен
-            col_letter = chr(ord('A') + tg_col)
+            col_letter = SheetManager._col_letter(tg_col)
             updates.append({"range": f"{col_letter}{existing}", "values": [[str(driver.tg_id)]]})
             put("Car", driver.car)
             put("Plates", driver.plates)
@@ -203,6 +247,8 @@ class SheetManager:
         headers = values[0]
         col = self._col_map(headers)
         tg_col = col.get("telegramID")
+        if tg_col is None:
+            return
         ws = self._ws(self.config.DRIVERS_SHEET)
 
         for i, row in enumerate(values[1:], start=2):
@@ -238,6 +284,8 @@ class SheetManager:
         headers = values[0]
         col = self._col_map(headers)
         tg_col = col.get("telegramID")
+        if tg_col is None:
+            raise SheetError("telegramID column not found in drivers_passengers")
         ws = self._ws(self.config.DRIVERS_PASSENGERS_SHEET)
 
         existing = None
@@ -254,11 +302,11 @@ class SheetManager:
                 idx = col.get(key)
                 if idx is None:
                     return
-                col_letter = chr(ord('A') + idx)
+                col_letter = SheetManager._col_letter(idx)
                 updates.append({"range": f"{col_letter}{existing}", "values": [[value]]})
 
             put("Name", dp.driver_name)
-            col_letter = chr(ord('A') + tg_col)
+            col_letter = SheetManager._col_letter(tg_col)
             updates.append({"range": f"{col_letter}{existing}", "values": [[str(dp.driver_tgid)]]})
 
             for i, key in enumerate(("Passenger1", "Passenger2", "Passenger3", "Passenger4")):
@@ -324,8 +372,8 @@ class SheetManager:
         headers = values[0]
         col = self._col_map(headers)
 
-        tg_col = col.get("telegramID") or col.get("telegramid")
-        name_col = col.get("Employee") or col.get("Name")
+        tg_col = self._col_get(col, "telegramID", "telegramid")
+        name_col = self._col_get(col, "Employee", "Name")
         rides_col = col.get("Rides with")
 
         if rides_col is None:
@@ -358,12 +406,12 @@ class SheetManager:
             matched += 1
 
             # Очищаем Rides with
-            rides_letter = chr(ord('A') + rides_col)
+            rides_letter = SheetManager._col_letter(rides_col)
             updates.append({"range": f"{rides_letter}{idx}", "values": [[""]]})
 
             # Очищаем telegramID
             if tg_col is not None:
-                tg_letter = chr(ord('A') + tg_col)
+                tg_letter = SheetManager._col_letter(tg_col)
                 updates.append({"range": f"{tg_letter}{idx}", "values": [[""]]})
 
         if not updates:
@@ -395,9 +443,9 @@ class SheetManager:
         headers = values[0]
         col = self._col_map(headers)
 
-        name_col = col.get("Employee") or col.get("Name")
+        name_col = self._col_get(col, "Employee", "Name")
         rides_col = col.get("Rides with")
-        tg_col = col.get("telegramID") or col.get("telegramid")
+        tg_col = self._col_get(col, "telegramID", "telegramid")
 
         if name_col is None or rides_col is None or tg_col is None:
             return 0
@@ -414,11 +462,11 @@ class SheetManager:
                 continue
 
             # Записываем Rides with = имя водителя
-            rides_letter = chr(ord('A') + rides_col)
+            rides_letter = SheetManager._col_letter(rides_col)
             updates.append({"range": f"{rides_letter}{idx}", "values": [[driver_name]]})
 
             # Записываем telegramID = ID водителя
-            tg_letter = chr(ord('A') + tg_col)
+            tg_letter = SheetManager._col_letter(tg_col)
             updates.append({"range": f"{tg_letter}{idx}", "values": [[str(driver_tgid)]]})
 
         if not updates:

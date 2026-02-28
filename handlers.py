@@ -237,6 +237,16 @@ class BotHandlers:
             )
             return ConversationHandler.END
 
+        # Защита: проверяем, не зарегистрирован ли уже другой водитель с этим именем
+        if self.sheets.is_name_taken_by_other_driver(emp.name, tg_id):
+            await self._reply(
+                update,
+                "⛔ Другой водитель уже зарегистрирован с этим именем.\n"
+                "Если это ошибка — обратись к администратору.",
+                reply_markup=self.kb_main(update.effective_user.id),
+            )
+            return ConversationHandler.END
+
         context.user_data["driver_name"] = emp.name
         await self._reply(update, "Марка/модель машины?\nПример: Kia Rio")
         return ST_DRIVER_CAR
@@ -254,7 +264,20 @@ class BotHandlers:
             car=context.user_data["driver_car"],
             plates=update.message.text.strip(),
         )
-        self.sheets.upsert_driver(driver)
+        try:
+            self.sheets.upsert_driver(driver)
+        except Exception as e:
+            await self.log_admin(
+                context, "Sheet write error (upsert driver)",
+                str(e)[-1500:], update,
+            )
+            await self._reply(
+                update,
+                "❌ Ошибка при сохранении. Попробуй ещё раз.",
+                reply_markup=self.kb_main(update.effective_user.id),
+            )
+            return ConversationHandler.END
+
         await self.log_admin(
             context, "Driver created/updated",
             f"{driver.name} ({tg_id})", update,
@@ -331,10 +354,24 @@ class BotHandlers:
             dp = self.sheets.get_driver_passengers(tg_id)
             passenger_names = set(dp.passengers) if dp else set()
 
-            # ВАЖНО: сначала удаляем из drivers_passengers (source of truth),
-            # чтобы Apps Script syncEmployeesAll не вернул данные обратно.
-            self.sheets.delete_driver_passengers(tg_id)
-            self.sheets.delete_driver(tg_id)
+            try:
+                # ВАЖНО: сначала удаляем из drivers_passengers (source of truth),
+                # чтобы Apps Script syncEmployeesAll не вернул данные обратно.
+                self.sheets.delete_driver_passengers(tg_id)
+                self.sheets.delete_driver(tg_id)
+            except Exception as e:
+                await self.log_admin(
+                    context,
+                    "Sheet write error (stop being driver)",
+                    str(e)[-1500:],
+                    update,
+                )
+                await self._reply(
+                    update,
+                    "❌ Ошибка при удалении. Попробуй ещё раз.",
+                    reply_markup=self.kb_main(update.effective_user.id),
+                )
+                return ConversationHandler.END
 
             # Теперь очищаем employees (Rides with + telegramID)
             cleared = 0
@@ -550,10 +587,22 @@ class BotHandlers:
             return ConversationHandler.END
 
         dp.passengers.remove(match)
-        self.sheets.upsert_driver_passengers(dp)
 
-        # Очищаем Rides with и telegramID для удалённого пассажира в employees
-        self.sheets.clear_rides_with(names={match})
+        try:
+            self.sheets.upsert_driver_passengers(dp)
+            # Очищаем Rides with и telegramID для удалённого пассажира в employees
+            self.sheets.clear_rides_with(names={match})
+        except Exception as e:
+            await self.log_admin(
+                context, "Sheet write error (remove passenger)",
+                str(e)[-1500:], update,
+            )
+            await self._reply(
+                update,
+                "❌ Ошибка при удалении. Попробуй ещё раз.",
+                reply_markup=self.kb_main(update.effective_user.id),
+            )
+            return ConversationHandler.END
 
         await self.log_admin(
             context, "Passenger removed",
@@ -628,14 +677,22 @@ class BotHandlers:
         if not state.is_pending(tg_id):
             return
 
-        dp = self.sheets.get_driver_passengers(tg_id)
-        if dp:
-            old_passengers = dp.passengers[:]
-            dp.passengers = []
-            self.sheets.upsert_driver_passengers(dp)
-            # Очищаем Rides with и telegramID пассажиров в employees
-            if old_passengers:
-                self.sheets.clear_rides_with(names=set(old_passengers))
+        try:
+            dp = self.sheets.get_driver_passengers(tg_id)
+            if dp:
+                old_passengers = dp.passengers[:]
+                dp.passengers = []
+                self.sheets.upsert_driver_passengers(dp)
+                # Очищаем Rides with и telegramID пассажиров в employees
+                if old_passengers:
+                    self.sheets.clear_rides_with(names=set(old_passengers))
+        except Exception as e:
+            await self.log_admin(
+                context, "Sheet write error (weekly timeout)",
+                f"tg_id={tg_id}\n{str(e)[-1500:]}",
+            )
+            # НЕ убираем pending — пусть останется для ручного разбора
+            return
 
         state.remove_pending(tg_id)
         await self.log_admin(
@@ -660,14 +717,27 @@ class BotHandlers:
                 reply_markup=self.kb_main(update.effective_user.id),
             )
         else:
-            dp = self.sheets.get_driver_passengers(tg_id)
-            if dp:
-                old_passengers = dp.passengers[:]
-                dp.passengers = []
-                self.sheets.upsert_driver_passengers(dp)
-                # Очищаем Rides with и telegramID пассажиров в employees
-                if old_passengers:
-                    self.sheets.clear_rides_with(names=set(old_passengers))
+            try:
+                dp = self.sheets.get_driver_passengers(tg_id)
+                if dp:
+                    old_passengers = dp.passengers[:]
+                    dp.passengers = []
+                    self.sheets.upsert_driver_passengers(dp)
+                    # Очищаем Rides with и telegramID пассажиров в employees
+                    if old_passengers:
+                        self.sheets.clear_rides_with(names=set(old_passengers))
+            except Exception as e:
+                await self.log_admin(
+                    context, "Sheet write error (weekly answer No)",
+                    str(e)[-1500:], update,
+                )
+                await self._reply(
+                    update,
+                    "❌ Ошибка при очистке. Обратись к администратору.",
+                    reply_markup=self.kb_main(update.effective_user.id),
+                )
+                return
+
             state.remove_pending(tg_id)
             await self.log_admin(
                 context, "Weekly ответ", "❌ Нет (очистка)", update,
