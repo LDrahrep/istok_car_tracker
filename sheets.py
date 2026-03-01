@@ -224,8 +224,10 @@ class SheetManager:
 
             ws.batch_update(updates)
         else:
-            # Для новой строки заполняем известные поля, остальные оставляем пустыми.
-            row_out = [""] * len(headers)
+            # Для новой строки заполняем ТОЛЬКО управляемые ботом поля.
+            # Остальные (Phone Number, Shift, DAYS и т.д.) оставляем None,
+            # чтобы не затирать формулы (VLOOKUP / ARRAYFORMULA).
+            row_out = [None] * len(headers)
 
             if "Name" in col:
                 row_out[col["Name"]] = driver.name
@@ -237,6 +239,10 @@ class SheetManager:
                 row_out[col["Plates"]] = driver.plates
             if "isActive" in col:
                 row_out[col["isActive"]] = "TRUE" if driver.is_active else "FALSE"
+
+            # Обрезаем хвостовые None, чтобы append_row не расширял строку зря
+            while row_out and row_out[-1] is None:
+                row_out.pop()
 
             ws.append_row(row_out, value_input_option="USER_ENTERED")
 
@@ -316,7 +322,8 @@ class SheetManager:
 
             ws.batch_update(updates)
         else:
-            row_out = [""] * len(headers)
+            # Только управляемые ботом поля; Phone Number, Shift — формулы.
+            row_out = [None] * len(headers)
 
             if "Name" in col:
                 row_out[col["Name"]] = dp.driver_name
@@ -325,6 +332,9 @@ class SheetManager:
             for idx, key in enumerate(("Passenger1", "Passenger2", "Passenger3", "Passenger4")):
                 if key in col:
                     row_out[col[key]] = dp.passengers[idx] if idx < len(dp.passengers) else ""
+
+            while row_out and row_out[-1] is None:
+                row_out.pop()
 
             ws.append_row(row_out, value_input_option="USER_ENTERED")
 
