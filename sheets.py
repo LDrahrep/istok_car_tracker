@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import time
+import logging
 from typing import Optional
 
 import gspread
 import difflib
+from gspread.exceptions import APIError
 from google.oauth2.service_account import Credentials
 
 from models import (
@@ -15,11 +18,24 @@ from models import (
     normalize_text,
 )
 
+logger = logging.getLogger(__name__)
+
+# Кеш чтений: 60 секунд достаточно чтобы еженедельная рассылка
+# прочитала employees и drivers_passengers один раз вместо ~270.
+_CACHE_TTL = 60  # seconds
+
+# Retry при 429 (quota exceeded)
+_RETRY_MAX = 3
+_RETRY_BASE_WAIT = 10  # seconds
+
 
 class SheetManager:
     def __init__(self, config):
         self.config = config
         self.client = self._build_client()
+        self._spreadsheet = None
+        self._cache: dict[str, tuple[float, list]] = {}
+        self._ws_cache: dict[str, object] = {}
 
     # -------------------------
     # Google client
@@ -33,18 +49,51 @@ class SheetManager:
         creds = Credentials.from_service_account_info(info, scopes=scopes)
         return gspread.authorize(creds)
 
+    def _retry(self, fn):
+        """Execute fn with retry on 429 quota errors."""
+        for attempt in range(_RETRY_MAX + 1):
+            try:
+                return fn()
+            except APIError as e:
+                if e.response.status_code == 429 and attempt < _RETRY_MAX:
+                    wait = (attempt + 1) * _RETRY_BASE_WAIT
+                    logger.warning(
+                        "Sheets API quota exceeded, retry %d/%d in %ds",
+                        attempt + 1, _RETRY_MAX, wait,
+                    )
+                    time.sleep(wait)
+                    self._spreadsheet = None
+                    continue
+                raise
+
+    def _open(self):
+        """Return cached Spreadsheet object (one API call on first use)."""
+        if self._spreadsheet is None:
+            self._spreadsheet = self._retry(
+                lambda: self.client.open_by_key(self.config.SPREADSHEET_ID)
+            )
+        return self._spreadsheet
+
     def _ws(self, name: str):
-        sh = self.client.open_by_key(self.config.SPREADSHEET_ID)
-        return sh.worksheet(name)
+        if name not in self._ws_cache:
+            self._ws_cache[name] = self._retry(
+                lambda: self._open().worksheet(name)
+            )
+        return self._ws_cache[name]
 
     def _values(self, name: str):
-        # Всегда читаем напрямую из Google Sheets (без кэша)
-        ws = self._ws(name)
-        return ws.get_all_values()
+        now = time.monotonic()
+        cached = self._cache.get(name)
+        if cached and (now - cached[0]) < _CACHE_TTL:
+            return cached[1]
+
+        values = self._retry(lambda: self._ws(name).get_all_values())
+        self._cache[name] = (time.monotonic(), values)
+        return values
 
     def _invalidate(self, name: str):
-        # кэш отключён — ничего делать не нужно
-        return
+        self._cache.pop(name, None)
+        self._ws_cache.pop(name, None)
 
     # -------------------------
     # helpers
