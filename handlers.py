@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from datetime import timedelta
+
 from typing import Optional
 
 from telegram import Update, ReplyKeyboardMarkup
@@ -663,41 +663,7 @@ class BotHandlers:
         state = get_state_manager(self.config.STATE_FILE)
         state.add_pending(tg_id, shift)
 
-        context.job_queue.run_once(
-            self._weekly_timeout,
-            when=timedelta(minutes=self.config.CONFIRMATION_TIMEOUT_MINUTES),
-            data={"tg_id": tg_id, "shift": shift},
-        )
 
-    async def _weekly_timeout(self, context):
-        data = context.job.data
-        tg_id = data["tg_id"]
-        state = get_state_manager(self.config.STATE_FILE)
-
-        if not state.is_pending(tg_id):
-            return
-
-        try:
-            dp = self.sheets.get_driver_passengers(tg_id)
-            if dp:
-                old_passengers = dp.passengers[:]
-                dp.passengers = []
-                self.sheets.upsert_driver_passengers(dp)
-                # Очищаем Rides with и telegramID пассажиров в employees
-                if old_passengers:
-                    self.sheets.clear_rides_with(names=set(old_passengers))
-        except Exception as e:
-            await self.log_admin(
-                context, "Sheet write error (weekly timeout)",
-                f"tg_id={tg_id}\n{str(e)[-1500:]}",
-            )
-            # НЕ убираем pending — пусть останется для ручного разбора
-            return
-
-        state.remove_pending(tg_id)
-        await self.log_admin(
-            context, "Weekly timeout — список очищен", f"tg_id={tg_id}",
-        )
 
     async def weekly_answer(self, update, context):
         tg_id = update.effective_user.id
