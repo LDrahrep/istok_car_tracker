@@ -144,19 +144,46 @@ class SheetManager:
     def get_all_employees(self) -> list[Employee]:
         values = self._values(self.config.EMPLOYEES_SHEET)
         if not values or len(values) < 2:
+            logger.warning("get_all_employees: no data (rows=%d)", len(values) if values else 0)
             return []
 
         headers = values[0]
-        return [
-            Employee.from_row(self._row_dict(headers, r))
-            for r in values[1:]
-        ]
+        logger.info(
+            "get_all_employees: sheet=%s rows=%d headers=%r",
+            self.config.EMPLOYEES_SHEET, len(values) - 1, headers,
+        )
+
+        employees = []
+        for r in values[1:]:
+            rd = self._row_dict(headers, r)
+            emp = Employee.from_row(rd)
+            employees.append(emp)
+
+        with_name = [e for e in employees if e.name]
+        logger.info(
+            "get_all_employees: total=%d with_name=%d sample_names=%r",
+            len(employees), len(with_name),
+            [e.name for e in with_name[:5]],
+        )
+        return employees
 
     def get_employee_by_name(self, name: str) -> Optional[Employee]:
         n = normalize_text(name)
-        for e in self.get_all_employees():
+        all_emp = self.get_all_employees()
+        logger.info(
+            "get_employee_by_name: looking for %r (normalized=%r) in %d employees",
+            name, n, len(all_emp),
+        )
+        for e in all_emp:
             if normalize_text(e.name) == n:
                 return e
+
+        # Дополнительная диагностика: покажем первые 10 нормализованных имён
+        sample = [normalize_text(e.name) for e in all_emp if e.name][:10]
+        logger.warning(
+            "get_employee_by_name: NOT FOUND %r among %d employees. Sample normalized: %r",
+            n, len(all_emp), sample,
+        )
         return None
 
     def get_employee_by_tgid(self, tg_id: int) -> Optional[Employee]:
@@ -641,6 +668,19 @@ class SheetManager:
             for e in all_employees
             if ShiftType.from_string(e.shift) == driver_shift
         ]
+
+        # Диагностика: логируем все смены
+        shift_counts: dict[str, int] = {}
+        for e in all_employees:
+            st = ShiftType.from_string(e.shift).value
+            shift_counts[st] = shift_counts.get(st, 0) + 1
+
+        logger.info(
+            "validate_passengers: driver_tgid=%d driver_shift=%s "
+            "all_employees=%d same_shift=%d shift_distribution=%r",
+            driver_tgid, driver_shift.value,
+            len(all_employees), len(same_shift_names), shift_counts,
+        )
 
         seen = set()
 
