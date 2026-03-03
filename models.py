@@ -6,7 +6,7 @@ from typing import Optional
 
 
 def normalize_text(s: str) -> str:
-    return (s or "").strip().casefold()
+    return (s or "").replace('\u00a0', ' ').strip().casefold()
 
 
 def normalize_shift(raw: str) -> str:
