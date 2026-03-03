@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import difflib
+import logging
 import time
 
 from typing import Optional
@@ -8,8 +10,10 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
 from config import Buttons
-from models import Driver, DriverPassengers, ShiftType
+from models import Driver, DriverPassengers, ShiftType, normalize_text
 from persistence import get_state_manager
+
+logger = logging.getLogger(__name__)
 
 
 (
@@ -195,11 +199,26 @@ class BotHandlers:
         name = update.message.text.strip()
         emp = self.sheets.get_employee_by_name(name)
         if not emp:
+            # Попробуем предложить похожие имена
+            all_emp = self.sheets.get_all_employees()
+            all_names = [e.name for e in all_emp if e.name]
+            suggestions = difflib.get_close_matches(
+                name, all_names, n=3, cutoff=0.6,
+            )
+            logger.info(
+                "become_driver_name: NOT FOUND %r, all_names=%d, suggestions=%r",
+                name, len(all_names), suggestions,
+            )
+            msg = "Сотрудник не найден 😕\n"
+            if suggestions:
+                msg += "Возможно, ты имел в виду:\n"
+                msg += "\n".join(f"• {s}" for s in suggestions)
+                msg += "\n\nПопробуй ещё раз."
+            else:
+                msg += "Проверь написание имени и фамилии.\nПример: Ivan Ivanov"
             await self._reply(
                 update,
-                "Сотрудник не найден 😕\n"
-                "Проверь написание имени и фамилии.\n"
-                "Пример: Ivan Ivanov",
+                msg,
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
