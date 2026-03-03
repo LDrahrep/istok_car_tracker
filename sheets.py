@@ -50,15 +50,17 @@ class SheetManager:
         return gspread.authorize(creds)
 
     def _retry(self, fn):
-        """Execute fn with retry on 429 quota errors."""
+        """Execute fn with retry on transient Google API errors."""
+        _RETRIABLE = {429, 500, 502, 503, 504}
         for attempt in range(_RETRY_MAX + 1):
             try:
                 return fn()
             except APIError as e:
-                if e.response.status_code == 429 and attempt < _RETRY_MAX:
+                if e.response.status_code in _RETRIABLE and attempt < _RETRY_MAX:
                     wait = (attempt + 1) * _RETRY_BASE_WAIT
                     logger.warning(
-                        "Sheets API quota exceeded, retry %d/%d in %ds",
+                        "Sheets API error %s, retry %d/%d in %ds",
+                        e.response.status_code,
                         attempt + 1, _RETRY_MAX, wait,
                     )
                     time.sleep(wait)
