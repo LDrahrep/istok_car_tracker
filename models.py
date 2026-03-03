@@ -77,8 +77,17 @@ class Employee:
         tg_raw = (row.get("telegramID") or row.get("telegramid") or "").strip()
         tg_id = int(tg_raw) if tg_raw.isdigit() else None
 
+        # Колонка с именем может называться "Employee", "Name",
+        # или вообще не иметь заголовка (пустая строка "").
+        name = (
+            row.get("Employee")
+            or row.get("Name")
+            or row.get("")
+            or ""
+        )
+
         return Employee(
-            name=row.get("Employee") or row.get("Name") or "",
+            name=name.strip() if name else "",
             phone=row.get("Phone Number") or "",
             shift=row.get("Shift") or "",
             rides_with=row.get("Rides with") or "",

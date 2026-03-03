@@ -403,7 +403,7 @@ class SheetManager:
         col = self._col_map(headers)
 
         tg_col = col.get("telegramID") or col.get("telegramid")
-        name_col = col.get("Employee") or col.get("Name")
+        name_col = col.get("Employee") or col.get("Name") or col.get("")
         rides_col = col.get("Rides with")
 
         if rides_col is None:
@@ -473,7 +473,7 @@ class SheetManager:
         headers = values[0]
         col = self._col_map(headers)
 
-        name_col = col.get("Employee") or col.get("Name")
+        name_col = col.get("Employee") or col.get("Name") or col.get("")
         rides_col = col.get("Rides with")
         tg_col = col.get("telegramID") or col.get("telegramid")
 
