@@ -1,59 +1,62 @@
 /**
  * Google Apps Script для приёма данных из ТАБЕЛЬ
+ * (привязан к таблице — использует getActiveSpreadsheet)
  *
  * Summary: Дата | Смена | Сотрудник | Check in | Check out | Объект | Часы
- * Часы — ARRAYFORMULA в G2 (создаётся автоматически)
+ * Daily:   Дата | Время | Сотрудник | Действие | Источник | Объект
  *
- * Смена по времени check-in: DAY_START..DAY_END → День, остальное → Ночь
- * Архив: 14 дней (очистка не чаще раза в сутки)
- *
- * ДИАГНОСТИКА: откройте URL деплоя в браузере — увидите тестовый результат.
- * Ошибки пишутся в лист "Debug".
+ * Смена по времени: 07:00–19:00 → День, остальное → Ночь
+ * Архив: 14 дней (очистка раз в сутки)
  */
 
-var SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1jZgVk4fJxw5bK9Pee5gxD9K35VK7x5cMMtu4lvdqtho/edit';
 var HOURS_FORMULA = '=ARRAYFORMULA(IF((D2:D<>"")*(E2:E<>""); ROUNDUP(IF(E2:E<D2:D; (1+E2:E-D2:D)*24; (E2:E-D2:D)*24)); ""))';
 var DAY_START = 7;
 var DAY_END   = 19;
+var TZ        = 'America/Chicago';
 
 // ═══════════════════════════════════════════════════════════════
-// ТЕСТ — откройте URL деплоя в браузере (GET-запрос)
+// ТЕСТ — откройте URL деплоя в браузере
 // ═══════════════════════════════════════════════════════════════
 function doGet(e) {
   try {
-    var ss   = SpreadsheetApp.openByUrl(SPREADSHEET_URL);
-    var tz   = Session.getScriptTimeZone();
-    var now  = new Date();
-    var dateStr = Utilities.formatDate(now, tz, 'dd.MM.yyyy');
-    var timeStr = Utilities.formatDate(now, tz, 'HH:mm');
-
-    var testData = {
-      name:      '_ТЕСТ_',
-      action:    'in',
-      timestamp: now.getTime(),
-      source:    'manual',
-      site_id:   'test'
-    };
-
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
     var results = [];
-    results.push('Скрипт: НОВЫЙ (getShiftByTime)');
-    results.push('Время: ' + dateStr + ' ' + timeStr);
-    results.push('Timezone: ' + tz);
 
-    // Тест Daily
-    try {
-      writeDaily(ss, testData, dateStr, timeStr);
-      results.push('writeDaily: OK');
-    } catch (err) {
-      results.push('writeDaily: ОШИБКА — ' + err.message);
-    }
+    // Диагностика времени
+    var now = new Date();
+    results.push('GAS сейчас (Chicago): ' + Utilities.formatDate(now, 'America/Chicago', 'MM.dd.yyyy HH:mm:ss'));
+    results.push('GAS сейчас (UTC):     ' + Utilities.formatDate(now, 'UTC', 'MM.dd.yyyy HH:mm:ss'));
+    results.push('Date.now() ms:        ' + now.getTime());
+    results.push('');
+    results.push('Spreadsheet: ' + ss.getName());
+    results.push('URL: ' + ss.getUrl());
 
-    // Тест Summary
-    try {
-      updateSummary(ss, testData, dateStr, timeStr, now, tz);
-      results.push('updateSummary: OK');
-    } catch (err) {
-      results.push('updateSummary: ОШИБКА — ' + err.message);
+    // Все листы
+    var sheets = ss.getSheets();
+    results.push('Листы: ' + sheets.map(function(s) { return s.getName(); }).join(', '));
+
+    // Summary — прямая запись
+    var summary = ss.getSheetByName('Summary');
+    if (!summary) {
+      results.push('Summary: НЕ НАЙДЕН!');
+    } else {
+      results.push('Summary найден, lastRow: ' + summary.getLastRow());
+
+      // Пишем напрямую через setValue (не appendRow)
+      var row = summary.getLastRow() + 1;
+      summary.getRange(row, 1).setValue('03.03.2026');  // MM.dd.yyyy
+      summary.getRange(row, 2).setValue('День');
+      summary.getRange(row, 3).setValue('_ДИАГНОСТИКА_');
+      summary.getRange(row, 4).setValue('15:00');
+      summary.getRange(row, 5).setValue('');
+      summary.getRange(row, 6).setValue('test');
+
+      SpreadsheetApp.flush();  // принудительная запись
+
+      results.push('Записано в строку: ' + row);
+      results.push('Проверка A' + row + ': ' + summary.getRange(row, 1).getValue());
+      results.push('Проверка C' + row + ': ' + summary.getRange(row, 3).getValue());
+      results.push('lastRow после: ' + summary.getLastRow());
     }
 
     return ContentService
@@ -61,7 +64,7 @@ function doGet(e) {
       .setMimeType(ContentService.MimeType.TEXT);
   } catch (err) {
     return ContentService
-      .createTextOutput('КРИТИЧЕСКАЯ ОШИБКА: ' + err.message)
+      .createTextOutput('ОШИБКА: ' + err.message + '\n' + err.stack)
       .setMimeType(ContentService.MimeType.TEXT);
   }
 }
@@ -80,18 +83,17 @@ function doPost(e) {
       return jsonResponse({ status: 'error', message: 'Invalid action' });
     }
 
-    var ss   = SpreadsheetApp.openByUrl(SPREADSHEET_URL);
-    var tz   = Session.getScriptTimeZone();
+    var ss   = SpreadsheetApp.getActiveSpreadsheet();
     var date = new Date(data.timestamp);
 
     if (isNaN(date.getTime())) {
       return jsonResponse({ status: 'error', message: 'Invalid timestamp' });
     }
 
-    var dateStr = Utilities.formatDate(date, tz, 'dd.MM.yyyy');
-    var timeStr = Utilities.formatDate(date, tz, 'HH:mm');
+    var dateStr = Utilities.formatDate(date, TZ, 'MM.dd.yyyy');
+    var timeStr = Utilities.formatDate(date, TZ, 'HH:mm');
 
-    // Daily — отдельный try/catch
+    // Daily — отдельный try/catch чтобы ошибка не блокировала Summary
     try {
       writeDaily(ss, data, dateStr, timeStr);
     } catch (err) {
@@ -100,7 +102,7 @@ function doPost(e) {
 
     // Summary — отдельный try/catch
     try {
-      updateSummary(ss, data, dateStr, timeStr, date, tz);
+      updateSummary(ss, data, dateStr, timeStr, date);
     } catch (err) {
       logError(ss, 'updateSummary', err);
     }
@@ -129,12 +131,9 @@ function logError(ss, funcName, err) {
       sheet.appendRow(['Время', 'Функция', 'Ошибка']);
       sheet.getRange(1, 1, 1, 3).setFontWeight('bold');
     }
-    var tz = Session.getScriptTimeZone();
-    var now = Utilities.formatDate(new Date(), tz, 'dd.MM.yyyy HH:mm:ss');
-    sheet.appendRow([now, funcName, err.message + ' | ' + err.stack]);
-  } catch (e) {
-    // Если даже логирование упало — ничего не можем сделать
-  }
+    var now = Utilities.formatDate(new Date(), TZ, 'MM.dd.yyyy HH:mm:ss');
+    sheet.appendRow([now, funcName, err.message]);
+  } catch (e) { /* ignore */ }
 }
 
 function jsonResponse(obj) {
@@ -144,15 +143,14 @@ function jsonResponse(obj) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Вспомогательные функции
+// Вспомогательные
 // ═══════════════════════════════════════════════════════════════
-
 function normalizeName(name) {
   return name.toString().trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
-function getShiftByTime(date, tz) {
-  var hour = parseInt(Utilities.formatDate(date, tz, 'HH'), 10);
+function getShiftByTime(date) {
+  var hour = parseInt(Utilities.formatDate(date, TZ, 'HH'), 10);
   return (hour >= DAY_START && hour < DAY_END) ? 'День' : 'Ночь';
 }
 
@@ -164,7 +162,7 @@ function getSourceText(source) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Daily
+// Daily — сырой лог
 // ═══════════════════════════════════════════════════════════════
 function writeDaily(ss, data, dateStr, timeStr) {
   var sheet = ss.getSheetByName('Daily');
@@ -185,9 +183,9 @@ function writeDaily(ss, data, dateStr, timeStr) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Summary
+// Summary — сводка по сменам
 // ═══════════════════════════════════════════════════════════════
-function updateSummary(ss, data, dateStr, timeStr, date, tz) {
+function updateSummary(ss, data, dateStr, timeStr, date) {
   var sheet = ss.getSheetByName('Summary');
   if (!sheet) {
     sheet = ss.insertSheet('Summary');
@@ -199,7 +197,7 @@ function updateSummary(ss, data, dateStr, timeStr, date, tz) {
   var normalizedInput = normalizeName(data.name);
 
   if (data.action === 'in') {
-    var shift = getShiftByTime(date, tz);
+    var shift = getShiftByTime(date);
     sheet.appendRow([dateStr, shift, data.name, timeStr, '', data.site_id || '']);
 
     if (sheet.getLastRow() === 2) {
@@ -221,7 +219,7 @@ function updateSummary(ss, data, dateStr, timeStr, date, tz) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Очистка (> 14 дней, не чаще раза в сутки)
+// Очистка (> 14 дней, раз в сутки)
 // ═══════════════════════════════════════════════════════════════
 function cleanupIfNeeded(ss) {
   var props = PropertiesService.getScriptProperties();
@@ -248,7 +246,7 @@ function cleanSheet(sheet, cutoff, hasFormula) {
   for (var i = 0; i < dates.length; i++) {
     var parts = dates[i][0].split('.');
     if (parts.length !== 3) break;
-    var rowDate = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+    var rowDate = new Date(parseInt(parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));
     if (rowDate < cutoff) {
       oldCount = i + 1;
     } else {
