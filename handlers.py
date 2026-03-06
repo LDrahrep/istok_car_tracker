@@ -325,10 +325,25 @@ class BotHandlers:
             )
             return
 
+        # Проверяем консистентность смен перед показом
+        shift_removed = self.sheets.enforce_shift_consistency(tg_id)
+
         dp = self.sheets.get_driver_passengers(tg_id)
         passengers = dp.passengers if dp else []
 
-        txt = (
+        txt = ""
+        if shift_removed:
+            txt += (
+                "⚠️ Пассажиры удалены из-за смены Shift:\n"
+                + "\n".join(f"• {n}" for n in shift_removed)
+                + "\n\n"
+            )
+            await self.log_admin(
+                context, "Shift consistency cleanup (my_record)",
+                f"driver_tgid={tg_id} removed={shift_removed}", update,
+            )
+
+        txt += (
             f"📋 Твоя запись:\n\n"
             f"👤 Имя: {driver.name}\n"
             f"🚗 Машина: {driver.car}\n"
@@ -369,16 +384,30 @@ class BotHandlers:
         tg_id = update.effective_user.id
 
         if update.message.text == Buttons.YES:
-            # Собираем текущих пассажиров (по именам) до удаления
-            dp = self.sheets.get_driver_passengers(tg_id)
-            passenger_names = set(dp.passengers) if dp else set()
+            # Сохраняем бэкапы ДО удаления для возможного отката
+            dp_backup = self.sheets.get_driver_passengers(tg_id)
+            driver_backup = self.sheets.get_driver(tg_id)
+            passenger_names = set(dp_backup.passengers) if dp_backup else set()
+            # Добавляем имя водителя (он тоже записан к себе в employees)
+            driver_name = dp_backup.driver_name if dp_backup else (driver_backup.name if driver_backup else "")
+            all_names = passenger_names | ({driver_name} if driver_name else set())
 
             try:
                 # ВАЖНО: сначала удаляем из drivers_passengers (source of truth),
                 # чтобы Apps Script syncEmployeesAll не вернул данные обратно.
                 self.sheets.delete_driver_passengers(tg_id)
                 self.sheets.delete_driver(tg_id)
+                # Очищаем employees (Rides with + telegramID) по именам
+                self.sheets.clear_rides_with(names=all_names)
             except Exception as e:
+                # Откат: восстанавливаем удалённые записи
+                try:
+                    if dp_backup:
+                        self.sheets.upsert_driver_passengers(dp_backup)
+                    if driver_backup:
+                        self.sheets.upsert_driver(driver_backup)
+                except Exception:
+                    pass
                 await self.log_admin(
                     context,
                     "Sheet write error (stop being driver)",
@@ -392,28 +421,14 @@ class BotHandlers:
                 )
                 return ConversationHandler.END
 
-            # Теперь очищаем employees (Rides with + telegramID)
-            cleared = 0
-            try:
-                cleared = self.sheets.clear_rides_with(
-                    tg_ids={tg_id},
-                    names=passenger_names,
-                )
-            except Exception as e:
-                await self.log_admin(
-                    context,
-                    "Exception while clearing rides_with",
-                    str(e)[-1500:],
-                    update,
-                )
-
             await self.log_admin(
                 context,
                 "Driver stopped being driver",
-                f"tg_id={tg_id}\npassengers={len(passenger_names)}\ncleared_rides_with_rows={cleared}",
+                f"tg_id={tg_id}\npassengers={len(passenger_names)}",
                 update,
             )
-            await update.message.reply_text(
+            await self._reply(
+                update,
                 "✅ Готово! Ты больше не водитель.\n"
                 "Теперь тебя можно добавить пассажиром 😉",
                 reply_markup=self.kb_main(update.effective_user.id),
@@ -442,9 +457,24 @@ class BotHandlers:
             )
             return ConversationHandler.END
 
+        # Проверяем консистентность смен перед добавлением
+        shift_removed = self.sheets.enforce_shift_consistency(tg_id)
+        prefix = ""
+        if shift_removed:
+            prefix = (
+                "⚠️ Пассажиры удалены из-за смены Shift:\n"
+                + "\n".join(f"• {n}" for n in shift_removed)
+                + "\n\n"
+            )
+            await self.log_admin(
+                context, "Shift consistency cleanup (add_passengers)",
+                f"driver_tgid={tg_id} removed={shift_removed}", update,
+            )
+
         await self._reply(
             update,
-            "Введи пассажиров (каждого с новой строки), максимум 4.\n\n"
+            prefix
+            + "Введи пассажиров (каждого с новой строки), максимум 4.\n\n"
             "Пример:\n"
             "Ivan Ivanov\n"
             "Maria Ivanova",
@@ -506,6 +536,9 @@ class BotHandlers:
             passengers=merged,
         )
 
+        # Бэкап для отката при частичном сбое
+        old_dp = self.sheets.get_driver_passengers(tg_id)
+
         try:
             self.sheets.upsert_driver_passengers(dp)
             self.sheets.assign_passengers_to_driver(
@@ -514,6 +547,14 @@ class BotHandlers:
                 passenger_names=merged,
             )
         except Exception as e:
+            # Откат drivers_passengers к предыдущему состоянию
+            try:
+                if old_dp:
+                    self.sheets.upsert_driver_passengers(old_dp)
+                else:
+                    self.sheets.delete_driver_passengers(tg_id)
+            except Exception:
+                pass
             await self.log_admin(
                 context, "Sheet write error (add passengers)",
                 str(e)[-1500:], update,
@@ -551,6 +592,20 @@ class BotHandlers:
 
     async def remove_passenger_start(self, update, context):
         tg_id = update.effective_user.id
+
+        # Проверяем консистентность смен перед показом списка
+        shift_removed = self.sheets.enforce_shift_consistency(tg_id)
+        if shift_removed:
+            await self.log_admin(
+                context, "Shift consistency cleanup (remove_passenger)",
+                f"driver_tgid={tg_id} removed={shift_removed}", update,
+            )
+            await self._reply(
+                update,
+                "⚠️ Пассажиры удалены из-за смены Shift:\n"
+                + "\n".join(f"• {n}" for n in shift_removed),
+            )
+
         dp = self.sheets.get_driver_passengers(tg_id)
 
         if not dp or not dp.passengers:
@@ -609,9 +664,14 @@ class BotHandlers:
 
         try:
             self.sheets.upsert_driver_passengers(dp)
-            # Очищаем Rides with и telegramID для удалённого пассажира в employees
             self.sheets.clear_rides_with(names={match})
         except Exception as e:
+            # Откат: восстанавливаем пассажира в списке
+            try:
+                dp.passengers.append(match)
+                self.sheets.upsert_driver_passengers(dp)
+            except Exception:
+                pass
             await self.log_admin(
                 context, "Sheet write error (remove passenger)",
                 str(e)[-1500:], update,
@@ -707,10 +767,18 @@ class BotHandlers:
                 if dp:
                     old_passengers = dp.passengers[:]
                     dp.passengers = []
-                    self.sheets.upsert_driver_passengers(dp)
-                    # Очищаем Rides with и telegramID пассажиров в employees
-                    if old_passengers:
-                        self.sheets.clear_rides_with(names=set(old_passengers))
+                    try:
+                        self.sheets.upsert_driver_passengers(dp)
+                        if old_passengers:
+                            self.sheets.clear_rides_with(names=set(old_passengers))
+                    except Exception as e:
+                        # Откат: восстанавливаем пассажиров
+                        try:
+                            dp.passengers = old_passengers
+                            self.sheets.upsert_driver_passengers(dp)
+                        except Exception:
+                            pass
+                        raise
             except Exception as e:
                 await self.log_admin(
                     context, "Sheet write error (weekly answer No)",

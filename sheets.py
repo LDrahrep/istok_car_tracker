@@ -20,10 +20,6 @@ from models import (
 
 logger = logging.getLogger(__name__)
 
-# Кеш чтений: 60 секунд достаточно чтобы еженедельная рассылка
-# прочитала employees и drivers_passengers один раз вместо ~270.
-_CACHE_TTL = 60  # seconds
-
 # Retry при 429 (quota exceeded)
 _RETRY_MAX = 3
 _RETRY_BASE_WAIT = 10  # seconds
@@ -34,7 +30,6 @@ class SheetManager:
         self.config = config
         self.client = self._build_client()
         self._spreadsheet = None
-        self._cache: dict[str, tuple[float, list]] = {}
         self._ws_cache: dict[str, object] = {}
 
     # -------------------------
@@ -84,18 +79,7 @@ class SheetManager:
         return self._ws_cache[name]
 
     def _values(self, name: str):
-        now = time.monotonic()
-        cached = self._cache.get(name)
-        if cached and (now - cached[0]) < _CACHE_TTL:
-            return cached[1]
-
-        values = self._retry(lambda: self._ws(name).get_all_values())
-        self._cache[name] = (time.monotonic(), values)
-        return values
-
-    def _invalidate(self, name: str):
-        self._cache.pop(name, None)
-        self._ws_cache.pop(name, None)
+        return self._retry(lambda: self._ws(name).get_all_values())
 
     # -------------------------
     # helpers
@@ -318,7 +302,6 @@ class SheetManager:
 
             ws.append_row(row_out, value_input_option="USER_ENTERED")
 
-        self._invalidate(self.config.DRIVERS_SHEET)
 
     def delete_driver(self, tg_id: int):
         values = self._values(self.config.DRIVERS_SHEET)
@@ -334,7 +317,6 @@ class SheetManager:
                 ws.delete_rows(i)
                 break
 
-        self._invalidate(self.config.DRIVERS_SHEET)
 
     # =========================
     # DriverPassengers
@@ -404,7 +386,6 @@ class SheetManager:
 
             ws.append_row(row_out, value_input_option="USER_ENTERED")
 
-        self._invalidate(self.config.DRIVERS_PASSENGERS_SHEET)
 
     def delete_driver_passengers(self, tg_id: int) -> bool:
         """Удалить строку водителя из drivers_passengers по TGID."""
@@ -422,26 +403,19 @@ class SheetManager:
         for i, row in enumerate(values[1:], start=2):
             if tg_col < len(row) and self._cell_eq(row[tg_col], tg_id):
                 ws.delete_rows(i)
-                self._invalidate(self.config.DRIVERS_PASSENGERS_SHEET)
                 return True
 
         return False
 
-    def clear_rides_with(
-        self,
-        *,
-        tg_ids: set[int] | None = None,
-        names: set[str] | None = None,
-    ) -> int:
+    def clear_rides_with(self, *, names: set[str]) -> int:
         """Очистить employees.Rides with И employees.telegramID для сотрудников.
 
-        Поиск по tg_ids ищет по колонке telegramID (= ID водителя),
-        поиск по names ищет по колонке Employee/Name.
-
+        Поиск ТОЛЬКО по имени (колонка Employee/Name).
         Возвращает число обновлённых строк.
         """
-        tg_ids = tg_ids or set()
-        names_norm = {normalize_text(n) for n in (names or set()) if n}
+        names_norm = {normalize_text(n) for n in names if n}
+        if not names_norm:
+            return 0
 
         values = self._values(self.config.EMPLOYEES_SHEET)
         if not values or len(values) < 2:
@@ -454,7 +428,7 @@ class SheetManager:
         name_col = self._col_get(col, "Employee", "Name", "")
         rides_col = col.get("Rides with")
 
-        if rides_col is None:
+        if rides_col is None or name_col is None:
             return 0
 
         ws = self._ws(self.config.EMPLOYEES_SHEET)
@@ -462,32 +436,18 @@ class SheetManager:
         matched = 0
 
         for idx, row in enumerate(values[1:], start=2):
-            row_tg = None
-            if tg_col is not None and tg_col < len(row):
-                raw = str(row[tg_col]).strip()
-                if raw.isdigit():
-                    row_tg = int(raw)
-
             row_name = ""
-            if name_col is not None and name_col < len(row):
+            if name_col < len(row):
                 row_name = str(row[name_col] or "")
 
-            match = False
-            if row_tg is not None and row_tg in tg_ids:
-                match = True
-            if not match and row_name and normalize_text(row_name) in names_norm:
-                match = True
-
-            if not match:
+            if not row_name or normalize_text(row_name) not in names_norm:
                 continue
 
             matched += 1
 
-            # Очищаем Rides with
             rides_letter = SheetManager._col_letter(rides_col)
             updates.append({"range": f"{rides_letter}{idx}", "values": [[""]]})
 
-            # Очищаем telegramID
             if tg_col is not None:
                 tg_letter = SheetManager._col_letter(tg_col)
                 updates.append({"range": f"{tg_letter}{idx}", "values": [[""]]})
@@ -496,7 +456,6 @@ class SheetManager:
             return 0
 
         ws.batch_update(updates)
-        self._invalidate(self.config.EMPLOYEES_SHEET)
         return matched
 
     def assign_passengers_to_driver(
@@ -551,7 +510,6 @@ class SheetManager:
             return 0
 
         ws.batch_update(updates)
-        self._invalidate(self.config.EMPLOYEES_SHEET)
         return len(updates) // 2  # каждый сотрудник = 2 обновления
 
     # =========================
@@ -741,6 +699,18 @@ class SheetManager:
                     )
                 continue
 
+            # Вторая линия защиты: проверяем source of truth (drivers_passengers)
+            hit = self.find_driver_for_passenger(emp.name)
+            if hit:
+                other_tgid, other_name = hit
+                if int(other_tgid) == int(driver_tgid):
+                    already_assigned.append(emp.name)
+                else:
+                    warnings.append(
+                        f"• {emp.name}: уже записан к другому водителю ({other_name})."
+                    )
+                continue
+
             valid.append(emp)
 
         if len(valid) > 4:
@@ -774,3 +744,54 @@ class SheetManager:
 
 
         return valid, errors, warnings
+
+    # =========================
+    # Shift consistency
+    # =========================
+
+    def enforce_shift_consistency(self, driver_tgid: int) -> list[str]:
+        """Удалить пассажиров, чья смена не совпадает со сменой водителя.
+
+        Запись водителя НЕ удаляется — удаляются только пассажиры с несовпадающей сменой.
+        Возвращает список имён удалённых пассажиров.
+        """
+        driver = self.get_driver(driver_tgid)
+        if not driver:
+            return []
+
+        driver_shift = ShiftType.from_string(driver.shift)
+        if driver_shift == ShiftType.UNKNOWN:
+            return []
+
+        dp = self.get_driver_passengers(driver_tgid)
+        if not dp or not dp.passengers:
+            return []
+
+        keep = []
+        removed = []
+
+        for pname in dp.passengers:
+            emp = self.get_employee_by_name(pname)
+            if not emp:
+                # Сотрудник не найден — удаляем из списка
+                removed.append(pname)
+                continue
+            p_shift = ShiftType.from_string(emp.shift)
+            if p_shift != driver_shift:
+                removed.append(pname)
+            else:
+                keep.append(pname)
+
+        if not removed:
+            return []
+
+        dp.passengers = keep
+        self.upsert_driver_passengers(dp)
+        self.clear_rides_with(names=set(removed))
+
+        logger.info(
+            "enforce_shift_consistency: driver_tgid=%d removed=%r kept=%r",
+            driver_tgid, removed, keep,
+        )
+
+        return removed
