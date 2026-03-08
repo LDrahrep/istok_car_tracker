@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 _RETRY_MAX = 3
 _RETRY_BASE_WAIT = 10  # seconds
 
+# Микро-кеш: дедупликация чтений в рамках одной операции (< 1 сек).
+# НЕ влияет на корректность: после каждой записи кеш инвалидируется,
+# а TTL настолько мал, что между разными пользовательскими действиями
+# всегда будут свежие данные.
+_OP_CACHE_TTL = 3  # seconds
+
 
 class SheetManager:
     def __init__(self, config):
@@ -31,6 +37,7 @@ class SheetManager:
         self.client = self._build_client()
         self._spreadsheet = None
         self._ws_cache: dict[str, object] = {}
+        self._op_cache: dict[str, tuple[float, list]] = {}
 
     # -------------------------
     # Google client
@@ -79,7 +86,19 @@ class SheetManager:
         return self._ws_cache[name]
 
     def _values(self, name: str):
-        return self._retry(lambda: self._ws(name).get_all_values())
+        now = time.time()
+        cached = self._op_cache.get(name)
+        if cached:
+            ts, data = cached
+            if now - ts < _OP_CACHE_TTL:
+                return data
+        data = self._retry(lambda: self._ws(name).get_all_values())
+        self._op_cache[name] = (now, data)
+        return data
+
+    def _invalidate(self, name: str):
+        """Сбросить микро-кеш для листа после записи."""
+        self._op_cache.pop(name, None)
 
     # -------------------------
     # helpers
@@ -285,6 +304,7 @@ class SheetManager:
             put("isActive", "TRUE" if driver.is_active else "FALSE")
 
             ws.batch_update(updates)
+            self._invalidate(self.config.DRIVERS_SHEET)
         else:
             # Для новой строки заполняем известные поля, остальные оставляем пустыми.
             row_out = [""] * len(headers)
@@ -301,6 +321,7 @@ class SheetManager:
                 row_out[col["isActive"]] = "TRUE" if driver.is_active else "FALSE"
 
             ws.append_row(row_out, value_input_option="USER_ENTERED")
+            self._invalidate(self.config.DRIVERS_SHEET)
 
 
     def delete_driver(self, tg_id: int):
@@ -315,6 +336,7 @@ class SheetManager:
         for i, row in enumerate(values[1:], start=2):
             if tg_col < len(row) and self._cell_eq(row[tg_col], tg_id):
                 ws.delete_rows(i)
+                self._invalidate(self.config.DRIVERS_SHEET)
                 break
 
 
@@ -373,6 +395,7 @@ class SheetManager:
                 put(key, dp.passengers[i] if i < len(dp.passengers) else "")
 
             ws.batch_update(updates)
+            self._invalidate(self.config.DRIVERS_PASSENGERS_SHEET)
         else:
             row_out = [""] * len(headers)
 
@@ -385,6 +408,7 @@ class SheetManager:
                     row_out[col[key]] = dp.passengers[idx] if idx < len(dp.passengers) else ""
 
             ws.append_row(row_out, value_input_option="USER_ENTERED")
+            self._invalidate(self.config.DRIVERS_PASSENGERS_SHEET)
 
 
     def delete_driver_passengers(self, tg_id: int) -> bool:
@@ -403,6 +427,7 @@ class SheetManager:
         for i, row in enumerate(values[1:], start=2):
             if tg_col < len(row) and self._cell_eq(row[tg_col], tg_id):
                 ws.delete_rows(i)
+                self._invalidate(self.config.DRIVERS_PASSENGERS_SHEET)
                 return True
 
         return False
@@ -456,6 +481,7 @@ class SheetManager:
             return 0
 
         ws.batch_update(updates)
+        self._invalidate(self.config.EMPLOYEES_SHEET)
         return matched
 
     def assign_passengers_to_driver(
@@ -510,6 +536,7 @@ class SheetManager:
             return 0
 
         ws.batch_update(updates)
+        self._invalidate(self.config.EMPLOYEES_SHEET)
         return len(updates) // 2  # каждый сотрудник = 2 обновления
 
     # =========================
