@@ -13,37 +13,42 @@ def normalize_text(s: str) -> str:
 def normalize_shift(raw: str) -> str:
     s = normalize_text(raw)
 
-    # Day == Meltech
-    if s in ("day", "meltech"):
+    if s in ("day",):
         return "day"
 
-    if s == "night":
+    if s in ("night",):
         return "night"
+
+    if s in ("meltech day",):
+        return "meltech_day"
+
+    if s in ("meltech night",):
+        return "meltech_night"
+
+    # Обратная совместимость: старое "Meltech" (без Day/Night) → meltech_day
+    if s in ("meltech",):
+        return "meltech_day"
 
     if not s:
         return "unknown"
 
-    # Любые неожиданные значения ("new" и т.п.) не должны ломать систему.
-    # По требованиям считаем их "прочими".
     return "other"
 
 
 class ShiftType(Enum):
     DAY = "day"
     NIGHT = "night"
+    MELTECH_DAY = "meltech_day"
+    MELTECH_NIGHT = "meltech_night"
     UNKNOWN = "unknown"
     OTHER = "other"
 
     @staticmethod
     def from_string(raw: str) -> "ShiftType":
         s = normalize_shift(raw)
-
-        if s == "day":
-            return ShiftType.DAY
-        if s == "night":
-            return ShiftType.NIGHT
-        if s == "unknown":
-            return ShiftType.UNKNOWN
+        for member in ShiftType:
+            if member.value == s:
+                return member
         return ShiftType.OTHER
 
     def to_display(self) -> str:
@@ -51,6 +56,10 @@ class ShiftType(Enum):
             return "Day"
         if self == ShiftType.NIGHT:
             return "Night"
+        if self == ShiftType.MELTECH_DAY:
+            return "Meltech Day"
+        if self == ShiftType.MELTECH_NIGHT:
+            return "Meltech Night"
         if self == ShiftType.UNKNOWN:
             return "Unknown"
         return "Other"

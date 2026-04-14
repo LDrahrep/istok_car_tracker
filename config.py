@@ -21,6 +21,8 @@ class Buttons:
     ADMIN_MODE_SHIFT = "🕒 По смене сотрудников"
     SHIFT_DAY = "☀️ Дневная смена"
     SHIFT_NIGHT = "🌙 Ночная смена"
+    SHIFT_MELTECH_DAY = "🔧☀️ Meltech Day"
+    SHIFT_MELTECH_NIGHT = "🔧🌙 Meltech Night"
 
 
 @dataclass

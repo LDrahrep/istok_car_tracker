@@ -844,7 +844,12 @@ class BotHandlers:
                 update,
                 "Выбери смену:",
                 reply_markup=ReplyKeyboardMarkup(
-                    [[Buttons.SHIFT_DAY], [Buttons.SHIFT_NIGHT]],
+                    [
+                        [Buttons.SHIFT_DAY],
+                        [Buttons.SHIFT_NIGHT],
+                        [Buttons.SHIFT_MELTECH_DAY],
+                        [Buttons.SHIFT_MELTECH_NIGHT],
+                    ],
                     resize_keyboard=True,
                 ),
             )
@@ -889,9 +894,13 @@ class BotHandlers:
 
     async def admin_shift(self, update, context):
         txt = update.message.text
-        shift = (
-            ShiftType.DAY if txt == Buttons.SHIFT_DAY else ShiftType.NIGHT
-        )
+        shift_map = {
+            Buttons.SHIFT_DAY: ShiftType.DAY,
+            Buttons.SHIFT_NIGHT: ShiftType.NIGHT,
+            Buttons.SHIFT_MELTECH_DAY: ShiftType.MELTECH_DAY,
+            Buttons.SHIFT_MELTECH_NIGHT: ShiftType.MELTECH_NIGHT,
+        }
+        shift = shift_map.get(txt, ShiftType.DAY)
 
         values = self.sheets._values(self.config.DRIVERS_PASSENGERS_SHEET)
         headers = values[0]

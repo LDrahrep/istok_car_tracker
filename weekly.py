@@ -85,8 +85,12 @@ async def run(shift_arg: str):
         target_shifts = {ShiftType.DAY}
     elif shift_arg == "night":
         target_shifts = {ShiftType.NIGHT}
+    elif shift_arg == "meltech_day":
+        target_shifts = {ShiftType.MELTECH_DAY}
+    elif shift_arg == "meltech_night":
+        target_shifts = {ShiftType.MELTECH_NIGHT}
     else:  # all
-        target_shifts = {ShiftType.DAY, ShiftType.NIGHT}
+        target_shifts = {ShiftType.DAY, ShiftType.NIGHT, ShiftType.MELTECH_DAY, ShiftType.MELTECH_NIGHT}
 
     # Берём всех водителей из drivers_passengers
     values = sheets._values(config.DRIVERS_PASSENGERS_SHEET)
@@ -153,7 +157,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--shift",
-        choices=["day", "night", "all"],
+        choices=["day", "night", "meltech_day", "meltech_night", "all"],
         default="all",
         help="Какую смену рассылать (day/night/all)",
     )
