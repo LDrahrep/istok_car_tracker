@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import difflib
 import logging
 import time
@@ -26,7 +27,8 @@ logger = logging.getLogger(__name__)
     ST_ADMIN_TGID,
     ST_ADMIN_SHIFT,
     ST_REMOVE_PASSENGER,
-) = range(20, 29)
+    ST_BROADCAST_CONFIRM,
+) = range(20, 30)
 
 
 class BotHandlers:
@@ -977,3 +979,127 @@ class BotHandlers:
             f"{'❌ Не удалось: ' + str(failed) if failed else ''}",
             reply_markup=self.kb_main(uid),
         )
+
+    # ======================================================
+    # Broadcast message (admin only)
+    # ======================================================
+
+    async def broadcast(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Send a custom message to all drivers. Usage: /broadcast <text>"""
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return ConversationHandler.END
+
+        text = " ".join(context.args) if context.args else ""
+        if not text.strip():
+            await self._reply(
+                update,
+                "Напиши текст после команды.\nПример: /broadcast Завтра обновление смен",
+                reply_markup=self.kb_main(uid),
+            )
+            return ConversationHandler.END
+
+        driver_tg_ids = self.sheets.get_all_driver_tgids()
+        context.user_data["broadcast_text"] = text
+        context.user_data["broadcast_count"] = len(driver_tg_ids)
+
+        await self._reply(
+            update,
+            f"Сообщение:\n\n{text}\n\nОтправить {len(driver_tg_ids)} водителям?",
+            reply_markup=ReplyKeyboardMarkup(
+                [[Buttons.YES, Buttons.NO]],
+                resize_keyboard=True,
+                one_time_keyboard=True,
+            ),
+        )
+        return ST_BROADCAST_CONFIRM
+
+    async def broadcast_confirm(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return ConversationHandler.END
+
+        if update.message.text != Buttons.YES:
+            await self._reply(
+                update,
+                "Рассылка отменена.",
+                reply_markup=self.kb_main(uid),
+            )
+            return ConversationHandler.END
+
+        text = context.user_data.pop("broadcast_text", "")
+        if not text:
+            await self._reply(
+                update,
+                "Текст сообщения не найден. Попробуй ещё раз.",
+                reply_markup=self.kb_main(uid),
+            )
+            return ConversationHandler.END
+
+        driver_tg_ids = self.sheets.get_all_driver_tgids()
+        sent = 0
+        failed = 0
+
+        for tg_id in driver_tg_ids:
+            try:
+                await context.bot.send_message(chat_id=tg_id, text=text)
+                sent += 1
+            except Exception:
+                failed += 1
+            await asyncio.sleep(0.1)
+
+        result = f"✅ Отправлено: {sent} водителям."
+        if failed:
+            result += f"\n❌ Не доставлено: {failed}"
+
+        await self._reply(update, result, reply_markup=self.kb_main(uid))
+        await self.log_admin(context, "Broadcast", f"sent={sent} failed={failed} text={text[:100]}", update)
+        return ConversationHandler.END
+
+    # ======================================================
+    # Report (admin only)
+    # ======================================================
+
+    async def report_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Send bi-weekly report summary to admin. Usage: /report"""
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+
+        try:
+            svodka_values = self.sheets._values("Svodka")
+        except Exception:
+            await self._reply(
+                update,
+                "Отчёт не найден. Сначала запусти generateBiWeeklyReport() в GAS.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        if not svodka_values or len(svodka_values) < 2:
+            await self._reply(
+                update,
+                "Отчёт пуст. Сначала запусти generateBiWeeklyReport() в GAS.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        header = svodka_values[0]
+        label_a = header[1] if len(header) > 1 else "Week A"
+        label_b = header[2] if len(header) > 2 else "Week B"
+
+        lines = [f"\U0001f4ca Сводка: {label_a} | {label_b}\n"]
+        for row in svodka_values[1:]:
+            name = row[0] if len(row) > 0 else ""
+            days_a = row[1] if len(row) > 1 else 0
+            days_b = row[2] if len(row) > 2 else 0
+            comment = row[3] if len(row) > 3 else "-"
+            if not name:
+                continue
+            flag = "" if comment == "-" else " \u26a0\ufe0f"
+            lines.append(f"  {name}: {days_a} | {days_b}{flag}")
+
+        text = "\n".join(lines)
+
+        for i in range(0, len(text), 4000):
+            await self._reply(update, text[i:i + 4000], reply_markup=self.kb_main(uid))

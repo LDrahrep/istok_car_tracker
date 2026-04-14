@@ -30,6 +30,7 @@ from handlers import (
     ST_ADMIN_TGID,
     ST_ADMIN_SHIFT,
     ST_REMOVE_PASSENGER,
+    ST_BROADCAST_CONFIRM,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -132,6 +133,7 @@ def build_app():
                 filters.Regex(f"^{re.escape(Buttons.ADMIN_WEEKLY_TARGET)}$"),
                 handlers.admin_weekly_start,
             ),
+            CommandHandler("broadcast", handlers.broadcast),
             MessageHandler(
                 filters.Regex(f"^{re.escape(Buttons.CANCEL)}$"),
                 handlers.cancel,
@@ -168,6 +170,12 @@ def build_app():
             ST_ADMIN_SHIFT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_shift)
             ],
+            ST_BROADCAST_CONFIRM: [
+                MessageHandler(
+                    filters.Regex(f"^({Buttons.YES}|{Buttons.NO})$"),
+                    handlers.broadcast_confirm,
+                )
+            ],
         },
         fallbacks=[
             MessageHandler(
@@ -190,6 +198,8 @@ def build_app():
 
     # Админская команда: разослать обновлённую клавиатуру всем
     app.add_handler(CommandHandler("broadcast_keyboard", handlers.broadcast_keyboard))
+
+    app.add_handler(CommandHandler("report", handlers.report_command))
 
     # Weekly YES/NO ответы
     app.add_handler(
