@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 
 from admin_log import format_exception
 
@@ -17,7 +16,8 @@ from telegram.ext import (
     filters,
 )
 
-from config import Config, Buttons
+from config import Config
+from i18n import button_regex
 from sheets import SheetManager
 from handlers import (
     BotHandlers,
@@ -48,7 +48,7 @@ def build_app():
 
     request = HTTPXRequest(
         connect_timeout=20.0,
-        read_timeout=120.0,     # важно для long-polling
+        read_timeout=120.0,
         write_timeout=20.0,
         pool_timeout=20.0,
     )
@@ -58,7 +58,6 @@ def build_app():
     ).request(request).build()
 
     async def on_error(update, context):
-        # Любые исключения логируем в админский чат (best-effort)
         if not config.ADMIN_CHAT_ID:
             return
         try:
@@ -78,11 +77,6 @@ def build_app():
     app.add_error_handler(on_error)
 
     async def log_incoming_railway(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Log every incoming update to Railway logs (console).
-
-        We intentionally do NOT spam the admin chat with every message.
-        Important events are already sent via handlers.log_admin(...) and on_error.
-        """
         u = update.effective_user
         c = update.effective_chat
         if not u:
@@ -106,38 +100,28 @@ def build_app():
             payload,
         )
 
-    # ВАЖНО: group=-1 чтобы логировать до ConversationHandler
     app.add_handler(MessageHandler(filters.ALL, log_incoming_railway), group=-1)
 
+    # Regex patterns that match buttons in any supported language
+    re_become_driver     = f"^({button_regex('btn.become_driver')})$"
+    re_add_passengers    = f"^({button_regex('btn.add_passengers')})$"
+    re_stop_being_driver = f"^({button_regex('btn.stop_being_driver')})$"
+    re_remove_passenger  = f"^({button_regex('btn.remove_passenger')})$"
+    re_admin_weekly      = f"^({button_regex('btn.admin_weekly_target')})$"
+    re_cancel            = f"^({button_regex('btn.cancel')})$"
+    re_my_record         = f"^({button_regex('btn.my_record')})$"
+    re_yes_no            = f"^({button_regex('btn.yes', 'btn.no')})$"
 
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", handlers.start),
-            MessageHandler(
-                filters.Regex(f"^{re.escape(Buttons.BECOME_DRIVER)}$"),
-                handlers.become_driver_start,
-            ),
-            MessageHandler(
-                filters.Regex(f"^{re.escape(Buttons.ADD_PASSENGERS)}$"),
-                handlers.add_passengers_start,
-            ),
-            MessageHandler(
-                filters.Regex(f"^{re.escape(Buttons.STOP_BEING_DRIVER)}$"),
-                handlers.stop_being_driver_start,
-            ),
-            MessageHandler(
-                filters.Regex(f"^{re.escape(Buttons.REMOVE_PASSENGER)}$"),
-                handlers.remove_passenger_start,
-            ),
-            MessageHandler(
-                filters.Regex(f"^{re.escape(Buttons.ADMIN_WEEKLY_TARGET)}$"),
-                handlers.admin_weekly_start,
-            ),
+            MessageHandler(filters.Regex(re_become_driver), handlers.become_driver_start),
+            MessageHandler(filters.Regex(re_add_passengers), handlers.add_passengers_start),
+            MessageHandler(filters.Regex(re_stop_being_driver), handlers.stop_being_driver_start),
+            MessageHandler(filters.Regex(re_remove_passenger), handlers.remove_passenger_start),
+            MessageHandler(filters.Regex(re_admin_weekly), handlers.admin_weekly_start),
             CommandHandler("broadcast", handlers.broadcast),
-            MessageHandler(
-                filters.Regex(f"^{re.escape(Buttons.CANCEL)}$"),
-                handlers.cancel,
-            ),
+            MessageHandler(filters.Regex(re_cancel), handlers.cancel),
         ],
         states={
             ST_DRIVER_NAME: [
@@ -153,10 +137,7 @@ def build_app():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.add_passengers_input)
             ],
             ST_STOP_CONFIRM: [
-                MessageHandler(
-                    filters.Regex(f"^({Buttons.YES}|{Buttons.NO})$"),
-                    handlers.stop_being_driver_confirm,
-                )
+                MessageHandler(filters.Regex(re_yes_no), handlers.stop_being_driver_confirm)
             ],
             ST_REMOVE_PASSENGER: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.remove_passenger_input)
@@ -171,56 +152,32 @@ def build_app():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_shift)
             ],
             ST_BROADCAST_CONFIRM: [
-                MessageHandler(
-                    filters.Regex(f"^({Buttons.YES}|{Buttons.NO})$"),
-                    handlers.broadcast_confirm,
-                )
+                MessageHandler(filters.Regex(re_yes_no), handlers.broadcast_confirm)
             ],
         },
         fallbacks=[
-            MessageHandler(
-                filters.Regex(f"^{re.escape(Buttons.CANCEL)}$"),
-                handlers.cancel,
-            )
+            MessageHandler(filters.Regex(re_cancel), handlers.cancel),
         ],
         allow_reentry=True,
     )
 
     app.add_handler(conv)
 
-    # My record — вне conversation, просто показывает данные
-    app.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(Buttons.MY_RECORD)}$"),
-            handlers.my_record,
-        )
-    )
+    app.add_handler(MessageHandler(filters.Regex(re_my_record), handlers.my_record))
 
-    # Админская команда: разослать обновлённую клавиатуру всем
     app.add_handler(CommandHandler("broadcast_keyboard", handlers.broadcast_keyboard))
-
     app.add_handler(CommandHandler("report", handlers.report_command))
+    app.add_handler(CommandHandler("english", handlers.set_language_english))
+    app.add_handler(CommandHandler("russian", handlers.set_language_russian))
 
-    # Weekly YES/NO ответы
-    app.add_handler(
-        MessageHandler(
-            filters.Regex(f"^({Buttons.YES}|{Buttons.NO})$"),
-            handlers.weekly_answer,
-        )
-    )
+    app.add_handler(MessageHandler(filters.Regex(re_yes_no), handlers.weekly_answer))
 
-    # Ловим всё, что не обработалось ни одним хендлером выше.
-    # ВАЖНО: группа 0 (по умолчанию), НЕ отдельная группа!
-    # В одной группе python-telegram-bot останавливается на первом совпадении,
-    # поэтому если ConversationHandler обработал — unknown НЕ сработает.
     app.add_handler(MessageHandler(filters.ALL, handlers.unknown))
 
-    # JobQueue: каждые 15 минут удаляем водителей, не ответивших на weekly check за 2 часа.
-    # Работает в том же процессе что и handlers, поэтому bot_state.json синхронизирован.
     app.job_queue.run_repeating(
         handlers.expire_job,
-        interval=15 * 60,  # 15 минут
-        first=60,          # первый запуск через 60 секунд после старта
+        interval=15 * 60,
+        first=60,
         name="expire_unanswered_weekly_checks",
     )
 

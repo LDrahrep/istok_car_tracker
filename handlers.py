@@ -11,6 +11,7 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
 from config import Buttons
+from i18n import t, button, set_user_lang, is_button
 from models import Driver, DriverPassengers, ShiftType, normalize_text
 from persistence import get_state_manager
 
@@ -74,25 +75,25 @@ class BotHandlers:
 
     def kb_main(self, user_id: int | None = None):
         keyboard = [
-            [Buttons.BECOME_DRIVER, Buttons.ADD_PASSENGERS],
-            [Buttons.MY_RECORD, Buttons.STOP_BEING_DRIVER],
-            [Buttons.REMOVE_PASSENGER],
+            [button("btn.become_driver", user_id), button("btn.add_passengers", user_id)],
+            [button("btn.my_record", user_id), button("btn.stop_being_driver", user_id)],
+            [button("btn.remove_passenger", user_id)],
         ]
 
         # Админскую кнопку показываем только администраторам
         if user_id is not None and user_id in self.config.ADMIN_USER_IDS:
-            keyboard.append([Buttons.ADMIN_WEEKLY_TARGET])
+            keyboard.append([button("btn.admin_weekly_target", user_id)])
 
-        keyboard.append([Buttons.CANCEL])
+        keyboard.append([button("btn.cancel", user_id)])
 
         return ReplyKeyboardMarkup(
             keyboard,
             resize_keyboard=True,
         )
 
-    def kb_yes_no(self):
+    def kb_yes_no(self, user_id: int | None = None):
         return ReplyKeyboardMarkup(
-            [[Buttons.YES, Buttons.NO]],
+            [[button("btn.yes", user_id), button("btn.no", user_id)]],
             resize_keyboard=True,
             one_time_keyboard=True,
         )
@@ -385,7 +386,7 @@ class BotHandlers:
     async def stop_being_driver_confirm(self, update, context):
         tg_id = update.effective_user.id
 
-        if update.message.text == Buttons.YES:
+        if is_button(update.message.text, "btn.yes"):
             # Сохраняем бэкапы ДО удаления для возможного отката
             dp_backup = self.sheets.get_driver_passengers(tg_id)
             driver_backup = self.sheets.get_driver(tg_id)
@@ -623,7 +624,7 @@ class BotHandlers:
 
         # Каждый пассажир — отдельная кнопка, плюс «Назад»
         kb = ReplyKeyboardMarkup(
-            [[p] for p in dp.passengers] + [[Buttons.CANCEL]],
+            [[p] for p in dp.passengers] + [[button("btn.cancel", update.effective_user.id)]],
             resize_keyboard=True,
             one_time_keyboard=True,
         )
@@ -753,14 +754,14 @@ class BotHandlers:
         if not state.is_pending(tg_id):
             return
 
-        if update.message.text == Buttons.YES:
+        if is_button(update.message.text, "btn.yes"):
             state.remove_pending(tg_id)
             await self.log_admin(
                 context, "Weekly ответ", "✅ Да", update,
             )
             await self._reply(
                 update,
-                "Ок, список оставлен.",
+                t("weekly.yes_answer", tg_id=tg_id),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
         else:
@@ -820,14 +821,15 @@ class BotHandlers:
             )
             return ConversationHandler.END
 
+        uid = update.effective_user.id
         await self._reply(
             update,
-            "Точечная проверка пассажиров.\n\nВыбери режим:",
+            t("admin.weekly_choose_mode", tg_id=uid),
             reply_markup=ReplyKeyboardMarkup(
                 [
-                    [Buttons.ADMIN_MODE_TGID],
-                    [Buttons.ADMIN_MODE_SHIFT],
-                    [Buttons.CANCEL],
+                    [button("btn.admin_mode_tgid", uid)],
+                    [button("btn.admin_mode_shift", uid)],
+                    [button("btn.cancel", uid)],
                 ],
                 resize_keyboard=True,
             ),
@@ -836,21 +838,22 @@ class BotHandlers:
 
     async def admin_mode(self, update, context):
         txt = update.message.text
+        uid = update.effective_user.id
 
-        if txt == Buttons.ADMIN_MODE_TGID:
-            await self._reply(update, "Введи Telegram ID водителя (число).\nПример: 123456789")
+        if is_button(txt, "btn.admin_mode_tgid"):
+            await self._reply(update, t("admin.weekly_enter_tgid", tg_id=uid))
             return ST_ADMIN_TGID
 
-        if txt == Buttons.ADMIN_MODE_SHIFT:
+        if is_button(txt, "btn.admin_mode_shift"):
             await self._reply(
                 update,
-                "Выбери смену:",
+                t("admin.weekly_choose_shift", tg_id=uid),
                 reply_markup=ReplyKeyboardMarkup(
                     [
-                        [Buttons.SHIFT_DAY],
-                        [Buttons.SHIFT_NIGHT],
-                        [Buttons.SHIFT_MELTECH_DAY],
-                        [Buttons.SHIFT_MELTECH_NIGHT],
+                        [button("btn.shift_day", uid)],
+                        [button("btn.shift_night", uid)],
+                        [button("btn.shift_meltech_day", uid)],
+                        [button("btn.shift_meltech_night", uid)],
                     ],
                     resize_keyboard=True,
                 ),
@@ -861,12 +864,13 @@ class BotHandlers:
 
     async def admin_tgid(self, update, context):
         raw = update.message.text.strip()
+        uid = update.effective_user.id
 
         if not raw.isdigit():
             await self._reply(
                 update,
-                "Telegram ID должен быть числом.\nПример: 123456789",
-                reply_markup=self.kb_main(update.effective_user.id),
+                t("admin.weekly_tgid_invalid", tg_id=uid),
+                reply_markup=self.kb_main(uid),
             )
             return ConversationHandler.END
 
@@ -875,8 +879,8 @@ class BotHandlers:
         if not self.sheets.get_driver(tg_id):
             await self._reply(
                 update,
-                f"Водитель с Telegram ID {tg_id} не найден.",
-                reply_markup=self.kb_main(update.effective_user.id),
+                t("admin.weekly_driver_not_found", tg_id=uid, driver_id=tg_id),
+                reply_markup=self.kb_main(uid),
             )
             return ConversationHandler.END
 
@@ -889,20 +893,23 @@ class BotHandlers:
         )
         await self._reply(
             update,
-            f"Проверка отправлена водителю (ID: {tg_id}).",
-            reply_markup=self.kb_main(update.effective_user.id),
+            t("admin.weekly_sent_tgid", tg_id=uid, driver_id=tg_id),
+            reply_markup=self.kb_main(uid),
         )
         return ConversationHandler.END
 
     async def admin_shift(self, update, context):
         txt = update.message.text
-        shift_map = {
-            Buttons.SHIFT_DAY: ShiftType.DAY,
-            Buttons.SHIFT_NIGHT: ShiftType.NIGHT,
-            Buttons.SHIFT_MELTECH_DAY: ShiftType.MELTECH_DAY,
-            Buttons.SHIFT_MELTECH_NIGHT: ShiftType.MELTECH_NIGHT,
-        }
-        shift = shift_map.get(txt, ShiftType.DAY)
+        if is_button(txt, "btn.shift_day"):
+            shift = ShiftType.DAY
+        elif is_button(txt, "btn.shift_night"):
+            shift = ShiftType.NIGHT
+        elif is_button(txt, "btn.shift_meltech_day"):
+            shift = ShiftType.MELTECH_DAY
+        elif is_button(txt, "btn.shift_meltech_night"):
+            shift = ShiftType.MELTECH_NIGHT
+        else:
+            shift = ShiftType.DAY
 
         values = self.sheets._values(self.config.DRIVERS_PASSENGERS_SHEET)
         headers = values[0]
@@ -1005,12 +1012,8 @@ class BotHandlers:
 
         await self._reply(
             update,
-            f"Сообщение:\n\n{text}\n\nОтправить {len(driver_tg_ids)} водителям?",
-            reply_markup=ReplyKeyboardMarkup(
-                [[Buttons.YES, Buttons.NO]],
-                resize_keyboard=True,
-                one_time_keyboard=True,
-            ),
+            t("admin.broadcast_confirm", tg_id=uid, text=text, count=len(driver_tg_ids)),
+            reply_markup=self.kb_yes_no(uid),
         )
         return ST_BROADCAST_CONFIRM
 
@@ -1019,10 +1022,10 @@ class BotHandlers:
         if uid not in self.config.ADMIN_USER_IDS:
             return ConversationHandler.END
 
-        if update.message.text != Buttons.YES:
+        if not is_button(update.message.text, "btn.yes"):
             await self._reply(
                 update,
-                "Рассылка отменена.",
+                t("admin.broadcast_cancelled", tg_id=uid),
                 reply_markup=self.kb_main(uid),
             )
             return ConversationHandler.END
@@ -1031,7 +1034,7 @@ class BotHandlers:
         if not text:
             await self._reply(
                 update,
-                "Текст сообщения не найден. Попробуй ещё раз.",
+                t("admin.broadcast_text_lost", tg_id=uid),
                 reply_markup=self.kb_main(uid),
             )
             return ConversationHandler.END
@@ -1059,6 +1062,28 @@ class BotHandlers:
     # ======================================================
     # Expire job (JobQueue)
     # ======================================================
+
+    # ======================================================
+    # Language switching
+    # ======================================================
+
+    async def set_language_english(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        uid = update.effective_user.id
+        set_user_lang(uid, "en", self.config.STATE_FILE)
+        await self._reply(
+            update,
+            t("lang.switched_en", tg_id=uid),
+            reply_markup=self.kb_main(uid),
+        )
+
+    async def set_language_russian(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        uid = update.effective_user.id
+        set_user_lang(uid, "ru", self.config.STATE_FILE)
+        await self._reply(
+            update,
+            t("lang.switched_ru", tg_id=uid),
+            reply_markup=self.kb_main(uid),
+        )
 
     async def expire_job(self, context: ContextTypes.DEFAULT_TYPE):
         """Периодически удаляет водителей, не ответивших на weekly check за 2 часа.

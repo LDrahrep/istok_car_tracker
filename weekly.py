@@ -18,6 +18,7 @@ import telegram
 from telegram import ReplyKeyboardMarkup
 
 from config import Config, Buttons
+from i18n import t, button
 from models import ShiftType
 from persistence import get_state_manager
 from sheets import SheetManager
@@ -26,9 +27,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def kb_yes_no():
+def kb_yes_no(tg_id: int | None = None):
     return ReplyKeyboardMarkup(
-        [[Buttons.YES, Buttons.NO]],
+        [[button("btn.yes", tg_id), button("btn.no", tg_id)]],
         resize_keyboard=True,
         one_time_keyboard=True,
     )
@@ -38,16 +39,14 @@ async def send_weekly(bot, sheets, state, config, tg_id: int, shift: str):
     dp = sheets.get_driver_passengers(tg_id)
     passengers = dp.passengers if dp else []
 
-    txt = "📅 Еженедельная проверка списка пассажиров\n\n"
-    txt += "Текущие пассажиры:\n"
-    txt += "\n".join(passengers) if passengers else "Нет пассажиров"
-    txt += "\n\nВсё актуально?"
+    passengers_block = "\n".join(passengers) if passengers else t("weekly.no_passengers", tg_id=tg_id)
+    txt = t("weekly.greeting", tg_id=tg_id, passengers=passengers_block)
 
     try:
         await bot.send_message(
             chat_id=tg_id,
             text=txt,
-            reply_markup=kb_yes_no(),
+            reply_markup=kb_yes_no(tg_id),
         )
         state.add_pending(tg_id, shift)
         logger.info(f"Sent weekly to tg_id={tg_id} shift={shift}")
@@ -204,10 +203,7 @@ async def expire_unanswered(bot, sheets, state, config):
             try:
                 await bot.send_message(
                     chat_id=tg_id,
-                    text=(
-                        "⏰ Ты не ответил на еженедельную проверку за 2 часа.\n"
-                        "Твоя запись удалена. Чтобы восстановить — нажми «🚗 Стать водителем»."
-                    ),
+                    text=t("weekly.expired_deleted", tg_id=tg_id),
                 )
             except Exception:
                 pass

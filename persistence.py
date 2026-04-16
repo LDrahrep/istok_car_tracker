@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 @dataclass
 class BotState:
     pending_confirmations: Dict[str, dict] = field(default_factory=dict)
+    user_languages: Dict[str, str] = field(default_factory=dict)
 
 
 class StateManager:
@@ -31,6 +32,9 @@ class StateManager:
             self.state.pending_confirmations = (
                 data.get("pending_confirmations", {}) or {}
             )
+            self.state.user_languages = (
+                data.get("user_languages", {}) or {}
+            )
         except Exception:
             self.state = BotState()
 
@@ -38,7 +42,8 @@ class StateManager:
         with open(self.filepath, "w", encoding="utf-8") as f:
             json.dump(
                 {
-                    "pending_confirmations": self.state.pending_confirmations
+                    "pending_confirmations": self.state.pending_confirmations,
+                    "user_languages": self.state.user_languages,
                 },
                 f,
                 ensure_ascii=False,
@@ -59,6 +64,16 @@ class StateManager:
     def remove_pending(self, tg_id: int):
         with self._lock:
             self.state.pending_confirmations.pop(str(tg_id), None)
+            self._save()
+
+    def get_language(self, tg_id: int) -> Optional[str]:
+        """Get user's preferred language code, or None if not set."""
+        return self.state.user_languages.get(str(tg_id))
+
+    def set_language(self, tg_id: int, lang: str) -> None:
+        """Set user's preferred language code."""
+        with self._lock:
+            self.state.user_languages[str(tg_id)] = lang
             self._save()
 
     def get_expired(self, timeout_seconds: int) -> List[Tuple[int, str]]:
