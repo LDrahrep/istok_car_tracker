@@ -1057,6 +1057,23 @@ class BotHandlers:
         return ConversationHandler.END
 
     # ======================================================
+    # Expire job (JobQueue)
+    # ======================================================
+
+    async def expire_job(self, context: ContextTypes.DEFAULT_TYPE):
+        """Периодически удаляет водителей, не ответивших на weekly check за 2 часа.
+
+        Запускается через JobQueue каждые 15 минут. Видит тот же bot_state.json,
+        что и weekly_answer handler, поэтому pending corrections синхронизированы.
+        """
+        from weekly import expire_unanswered
+        state = get_state_manager(self.config.STATE_FILE)
+        try:
+            await expire_unanswered(context.bot, self.sheets, state, self.config)
+        except Exception as e:
+            logger.error("expire_job failed: %s", e)
+
+    # ======================================================
     # Report (admin only)
     # ======================================================
 

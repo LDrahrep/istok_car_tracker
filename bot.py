@@ -215,6 +215,15 @@ def build_app():
     # поэтому если ConversationHandler обработал — unknown НЕ сработает.
     app.add_handler(MessageHandler(filters.ALL, handlers.unknown))
 
+    # JobQueue: каждые 15 минут удаляем водителей, не ответивших на weekly check за 2 часа.
+    # Работает в том же процессе что и handlers, поэтому bot_state.json синхронизирован.
+    app.job_queue.run_repeating(
+        handlers.expire_job,
+        interval=15 * 60,  # 15 минут
+        first=60,          # первый запуск через 60 секунд после старта
+        name="expire_unanswered_weekly_checks",
+    )
+
     return app
 
 
