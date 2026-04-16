@@ -633,6 +633,14 @@ class SheetManager:
         driver_shift = ShiftType.from_string(driver_record.shift)
         driver_name_norm = normalize_text(driver_record.name)
 
+        # Fallback: drivers.Shift заполняется ARRAYFORMULA, которая может не
+        # успеть пересчитаться после регистрации. Берём смену напрямую
+        # из employees по имени водителя.
+        if driver_shift == ShiftType.UNKNOWN:
+            emp_driver = self.get_employee_by_name(driver_record.name)
+            if emp_driver:
+                driver_shift = ShiftType.from_string(emp_driver.shift)
+
         if driver_shift == ShiftType.UNKNOWN:
             errors.append(
                 "⛔ У тебя не указана смена.\n"
@@ -787,6 +795,11 @@ class SheetManager:
             return []
 
         driver_shift = ShiftType.from_string(driver.shift)
+        # Fallback к employees если ARRAYFORMULA ещё не пересчиталась
+        if driver_shift == ShiftType.UNKNOWN:
+            emp_driver = self.get_employee_by_name(driver.name)
+            if emp_driver:
+                driver_shift = ShiftType.from_string(emp_driver.shift)
         if driver_shift == ShiftType.UNKNOWN:
             return []
 
