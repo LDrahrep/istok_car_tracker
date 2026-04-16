@@ -5,6 +5,7 @@ Cron-скрипт для еженедельной рассылки.
   python weekly.py --shift day
   python weekly.py --shift night
   python weekly.py --shift all
+  python weekly.py --expire          # Удалить водителей, не ответивших за 2 часа
 """
 from __future__ import annotations
 
@@ -153,6 +154,103 @@ async def run(shift_arg: str):
             pass
 
 
+EXPIRE_TIMEOUT_SECONDS = 2 * 60 * 60  # 2 часа
+
+
+async def expire_unanswered(bot, sheets, state, config):
+    """Удалить водителей, которые не ответили на weekly check за 2 часа.
+
+    Порядок удаления тот же, что в stop_being_driver_confirm:
+      1. drivers_passengers (source of truth — чтобы GAS не вернул данные)
+      2. drivers
+      3. clear_rides_with (employees: Rides with + telegramID)
+    """
+    expired = state.get_expired(EXPIRE_TIMEOUT_SECONDS)
+    if not expired:
+        logger.info("expire: no expired pending confirmations")
+        return
+
+    logger.info(f"expire: found {len(expired)} unanswered drivers")
+
+    removed = 0
+    failed = 0
+
+    for tg_id, shift in expired:
+        try:
+            dp_backup = sheets.get_driver_passengers(tg_id)
+            driver_backup = sheets.get_driver(tg_id)
+            passenger_names = set(dp_backup.passengers) if dp_backup else set()
+            driver_name = dp_backup.driver_name if dp_backup else (driver_backup.name if driver_backup else "")
+            all_names = passenger_names | ({driver_name} if driver_name else set())
+
+            try:
+                sheets.delete_driver_passengers(tg_id)
+                sheets.delete_driver(tg_id)
+                sheets.clear_rides_with(names=all_names)
+            except Exception as e:
+                # Откат при частичном сбое
+                try:
+                    if dp_backup:
+                        sheets.upsert_driver_passengers(dp_backup)
+                    if driver_backup:
+                        sheets.upsert_driver(driver_backup)
+                except Exception:
+                    pass
+                raise e
+
+            state.remove_pending(tg_id)
+            removed += 1
+
+            try:
+                await bot.send_message(
+                    chat_id=tg_id,
+                    text=(
+                        "⏰ Ты не ответил на еженедельную проверку за 2 часа.\n"
+                        "Твоя запись удалена. Чтобы восстановить — нажми «🚗 Стать водителем»."
+                    ),
+                )
+            except Exception:
+                pass
+
+            if config.ADMIN_CHAT_ID:
+                try:
+                    await bot.send_message(
+                        chat_id=config.ADMIN_CHAT_ID,
+                        text=(
+                            f"⏰ Expire: удалён водитель tg_id={tg_id} "
+                            f"shift={shift} passengers={len(passenger_names)}"
+                        ),
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            failed += 1
+            logger.error(f"expire: failed for tg_id={tg_id}: {e}")
+            if config.ADMIN_CHAT_ID:
+                try:
+                    await bot.send_message(
+                        chat_id=config.ADMIN_CHAT_ID,
+                        text=f"⚠️ Expire failed for tg_id={tg_id}: {str(e)[:500]}",
+                    )
+                except Exception:
+                    pass
+
+        await asyncio.sleep(0.1)
+
+    logger.info(f"expire: removed={removed} failed={failed}")
+
+
+async def run_expire():
+    config = Config()
+    if not config.TELEGRAM_BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN not set")
+        sys.exit(1)
+    sheets = SheetManager(config)
+    state = get_state_manager(config.STATE_FILE)
+    bot = telegram.Bot(token=config.TELEGRAM_BOT_TOKEN)
+    await expire_unanswered(bot, sheets, state, config)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -161,8 +259,16 @@ def main():
         default="all",
         help="Какую смену рассылать (day/night/all)",
     )
+    parser.add_argument(
+        "--expire",
+        action="store_true",
+        help="Удалить водителей, не ответивших на weekly check за 2 часа",
+    )
     args = parser.parse_args()
-    asyncio.run(run(args.shift))
+    if args.expire:
+        asyncio.run(run_expire())
+    else:
+        asyncio.run(run(args.shift))
 
 
 if __name__ == "__main__":

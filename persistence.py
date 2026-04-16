@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -50,7 +51,8 @@ class StateManager:
     def add_pending(self, tg_id: int, shift: str):
         with self._lock:
             self.state.pending_confirmations[str(tg_id)] = {
-                "shift": shift
+                "shift": shift,
+                "sent_at": time.time(),
             }
             self._save()
 
@@ -58,6 +60,21 @@ class StateManager:
         with self._lock:
             self.state.pending_confirmations.pop(str(tg_id), None)
             self._save()
+
+    def get_expired(self, timeout_seconds: int) -> List[Tuple[int, str]]:
+        """Return list of (tg_id, shift) pairs that have been pending longer than timeout."""
+        now = time.time()
+        expired = []
+        with self._lock:
+            for key, entry in self.state.pending_confirmations.items():
+                sent_at = entry.get("sent_at")
+                if sent_at is None:
+                    # Legacy entries without timestamp — treat as expired
+                    expired.append((int(key), entry.get("shift", "")))
+                    continue
+                if now - sent_at >= timeout_seconds:
+                    expired.append((int(key), entry.get("shift", "")))
+        return expired
 
 
 _state_mgr: Optional[StateManager] = None
