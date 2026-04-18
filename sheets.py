@@ -16,6 +16,7 @@ from models import (
     ShiftType,
     SheetError,
     normalize_text,
+    normalize_sorted,
 )
 
 logger = logging.getLogger(__name__)
@@ -172,14 +173,29 @@ class SheetManager:
 
     def get_employee_by_name(self, name: str) -> Optional[Employee]:
         n = normalize_text(name)
+        n_sorted = normalize_sorted(name)
         all_emp = self.get_all_employees()
         logger.info(
             "get_employee_by_name: looking for %r (normalized=%r) in %d employees",
             name, n, len(all_emp),
         )
+
+        reversed_match: Optional[Employee] = None
         for e in all_emp:
-            if normalize_text(e.name) == n:
+            if not e.name:
+                continue
+            en = normalize_text(e.name)
+            if en == n:
                 return e
+            if reversed_match is None and normalize_sorted(e.name) == n_sorted:
+                reversed_match = e
+
+        if reversed_match:
+            logger.info(
+                "get_employee_by_name: matched %r via reversed-token lookup -> %r",
+                name, reversed_match.name,
+            )
+            return reversed_match
 
         # Дополнительная диагностика: покажем первые 10 нормализованных имён
         sample = [normalize_text(e.name) for e in all_emp if e.name][:10]
@@ -654,6 +670,14 @@ class SheetManager:
             normalize_text(e.name): e
             for e in all_employees
         }
+        # Индекс по отсортированным токенам для матчинга перевёрнутых имён
+        # ("Ivanov Petr" -> "Petr Ivanov"). Если два сотрудника дают один
+        # и тот же ключ, оставляем первого — это крайне маловероятный случай.
+        employees_sorted = {}
+        for e in all_employees:
+            key = normalize_sorted(e.name)
+            if key and key not in employees_sorted:
+                employees_sorted[key] = e
 
         # кандидаты для подсказок: только сотрудники той же смены
         same_shift_names = [
@@ -684,6 +708,14 @@ class SheetManager:
 
             seen.add(n)
             emp = employees.get(n)
+
+            if not emp:
+                emp = employees_sorted.get(normalize_sorted(raw))
+                if emp:
+                    logger.info(
+                        "validate_passengers: matched %r via reversed-token lookup -> %r",
+                        raw, emp.name,
+                    )
 
             if not emp:
                 suggestions = difflib.get_close_matches(

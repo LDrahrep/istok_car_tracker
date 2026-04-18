@@ -10,6 +10,10 @@ def normalize_text(s: str) -> str:
     return " ".join(s.split()).casefold()
 
 
+def normalize_sorted(s: str) -> str:
+    return " ".join(sorted(normalize_text(s).split()))
+
+
 def normalize_shift(raw: str) -> str:
     s = normalize_text(raw)
 
