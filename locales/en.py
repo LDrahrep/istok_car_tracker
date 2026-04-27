@@ -72,6 +72,7 @@ STRINGS = {
     "weekly.no_passengers": "No passengers",
     "weekly.yes_answer": "Ok, list kept as is.",
     "weekly.no_answer": "List cleared.",
+    "weekly.unclear": "🤔 Couldn't understand. If the list is correct — tap \"✅ Yes\" or type \"Yes\". If you want to clear it — tap \"❌ No\" or type \"No\".",
     "weekly.error": "❌ Error while clearing. Contact the administrator.",
     "weekly.expired_deleted": "⏰ You didn't respond to the weekly check within 2 hours.\nYour record has been deleted. To restore — press \"🚗 Become a driver\".",
 

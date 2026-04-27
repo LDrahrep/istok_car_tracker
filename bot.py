@@ -15,9 +15,11 @@ from telegram.ext import (
     ConversationHandler,
     filters,
 )
+from telegram.ext.filters import MessageFilter
 
 from config import Config
-from i18n import button_regex
+from i18n import all_translations, button_regex
+from persistence import get_state_manager
 from sheets import SheetManager
 from handlers import (
     BotHandlers,
@@ -35,6 +37,41 @@ from handlers import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class _PendingWeeklyFilter(MessageFilter):
+    """Matches text from a user with an open weekly-check, except main keyboard
+    button presses (those keep going to their normal handlers).
+
+    Lets weekly_answer process free-form replies like "Да", "Yes", "Пока да",
+    "Всё актуально" instead of falling through to the unknown handler.
+    """
+
+    name = "PendingWeeklyFilter"
+
+    def __init__(self, state_path: str):
+        super().__init__()
+        self._state_path = state_path
+        self._main_buttons: set[str] = set()
+        for key in (
+            "btn.become_driver", "btn.add_passengers", "btn.stop_being_driver",
+            "btn.remove_passenger", "btn.admin_weekly_target", "btn.cancel",
+            "btn.my_record", "btn.admin_mode_tgid", "btn.admin_mode_shift",
+            "btn.shift_day", "btn.shift_night",
+            "btn.shift_meltech_day", "btn.shift_meltech_night",
+        ):
+            self._main_buttons.update(all_translations(key))
+
+    def filter(self, message):
+        if not message or not message.text or not message.from_user:
+            return False
+        if message.text in self._main_buttons:
+            return False
+        try:
+            state = get_state_manager(self._state_path)
+            return state.is_pending(message.from_user.id)
+        except Exception:
+            return False
 
 
 def build_app():
@@ -170,7 +207,11 @@ def build_app():
     app.add_handler(CommandHandler("english", handlers.set_language_english))
     app.add_handler(CommandHandler("russian", handlers.set_language_russian))
 
-    app.add_handler(MessageHandler(filters.Regex(re_yes_no), handlers.weekly_answer))
+    pending_weekly_filter = _PendingWeeklyFilter(config.STATE_FILE)
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & pending_weekly_filter,
+        handlers.weekly_answer,
+    ))
 
     app.add_handler(MessageHandler(filters.ALL, handlers.unknown))
 
