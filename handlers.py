@@ -30,7 +30,11 @@ logger = logging.getLogger(__name__)
     ST_ADMIN_SHIFT,
     ST_REMOVE_PASSENGER,
     ST_BROADCAST_CONFIRM,
-) = range(20, 30)
+    ST_DRIVER_CITY,
+    ST_SEARCH_NAME,
+    ST_SEARCH_MODE,
+    ST_SEARCH_VALUE,
+) = range(20, 34)
 
 
 class BotHandlers:
@@ -78,7 +82,7 @@ class BotHandlers:
         keyboard = [
             [button("btn.become_driver", user_id), button("btn.add_passengers", user_id)],
             [button("btn.my_record", user_id), button("btn.stop_being_driver", user_id)],
-            [button("btn.remove_passenger", user_id)],
+            [button("btn.remove_passenger", user_id), button("btn.find_driver", user_id)],
         ]
 
         # Админскую кнопку показываем только администраторам
@@ -227,38 +231,10 @@ class BotHandlers:
             )
             return ConversationHandler.END
 
-        # Если сотрудник уже является пассажиром — не даём стать водителем
-        if self._is_real_passenger_emp(emp):
-            await self._reply(
-                update,
-                "Похоже, сейчас ты записан как пассажир.\n\n"
-                f"Сначала тебя нужно убрать из списка водителя: {emp.rides_with.strip()}.\n"
-                "Попроси водителя нажать кнопку «🧑‍🤝‍🧑 Удалить пассажира» и удалить тебя из списка.\n\n"
-                "После этого ты сможешь стать водителем 🚗",
-                reply_markup=self.kb_main(update.effective_user.id),
-            )
-            return ConversationHandler.END
-
-        # Дополнительная защита: даже если rides_with не заполнен,
-        # проверяем фактическое присутствие в drivers_passengers.
-        hit = self.sheets.find_driver_for_passenger(emp.name)
-        if hit:
-            driver_tg, driver_name = hit
-            # Если найден "водитель" == текущий пользователь (сам себе пассажир) — игнорируем.
-            if int(driver_tg) == int(tg_id) or (driver_name and driver_name.casefold().strip() == (emp.name or "").casefold().strip()):
-                hit = None
-        if hit:
-            driver_tg, driver_name = hit
-            driver_label = driver_name or str(driver_tg)
-            await self._reply(
-                update,
-                "Похоже, сейчас ты пассажир в списке водителя.\n\n"
-                f"Водитель: {driver_label}\n"
-                "Сначала попроси водителя удалить тебя кнопкой «🧑‍🤝‍🧑 Удалить пассажира».\n\n"
-                "После этого ты сможешь стать водителем 🚗",
-                reply_markup=self.kb_main(update.effective_user.id),
-            )
-            return ConversationHandler.END
+        # Двойная роль разрешена: сотрудник может быть пассажиром у другого водителя
+        # и при этом зарегистрироваться водителем (пока у него нет своих пассажиров).
+        # Как только он добавит своих пассажиров — авто-отвязка уберёт его из чужого
+        # карпула. Поэтому блок «ты пассажир — нельзя стать водителем» убран.
 
         # Защита: проверяем, не зарегистрирован ли уже другой водитель с этим именем
         if self.sheets.is_name_taken_by_other_driver(emp.name, tg_id):
@@ -280,34 +256,52 @@ class BotHandlers:
         return ST_DRIVER_PLATES
 
     async def become_driver_plates(self, update, context):
+        context.user_data["driver_plates"] = update.message.text.strip()
+        await self._reply(update, t("driver.ask_city", tg_id=update.effective_user.id))
+        return ST_DRIVER_CITY
+
+    async def become_driver_city(self, update, context):
         tg_id = update.effective_user.id
+        raw = update.message.text.strip()
+        resolved = self.sheets.resolve_city(raw)
+        if not resolved:
+            all_cities = [f"{c}, {s}" if s else c for c, s in self.sheets.cities()]
+            suggestions = difflib.get_close_matches(raw, all_cities, n=5, cutoff=0.5)
+            msg = t("driver.city_not_found", tg_id=tg_id)
+            if suggestions:
+                msg += "\n" + "\n".join(f"• {s}" for s in suggestions)
+            await self._reply(update, msg)
+            return ST_DRIVER_CITY
+
+        city, state = resolved
         driver = Driver(
             name=context.user_data["driver_name"],
             tg_id=tg_id,
+            username=(update.effective_user.username or ""),
             car=context.user_data["driver_car"],
-            plates=update.message.text.strip(),
+            plates=context.user_data["driver_plates"],
+            city=city,
+            state=state,
         )
         try:
             self.sheets.upsert_driver(driver)
         except Exception as e:
             await self.log_admin(
-                context, "Sheet write error (upsert driver)",
-                str(e)[-1500:], update,
+                context, "Sheet write error (upsert driver)", str(e)[-1500:], update,
             )
             await self._reply(
-                update,
-                "❌ Ошибка при сохранении. Попробуй ещё раз.",
+                update, "❌ Ошибка при сохранении. Попробуй ещё раз.",
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
 
         await self.log_admin(
             context, "Driver created/updated",
-            f"{driver.name} ({tg_id})", update,
+            f"{driver.name} ({tg_id}) {city}, {state}", update,
         )
         await self._reply(
             update,
-            "✅ Запись водителя сохранена.\n"
+            f"✅ Запись водителя сохранена. Город: {city}, {state}.\n"
             "Теперь можешь добавить пассажиров кнопкой «👥 Добавить пассажиров».",
             reply_markup=self.kb_main(update.effective_user.id),
         )
@@ -569,6 +563,28 @@ class BotHandlers:
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
+
+        # Авто-отвязка: если этот водитель сам числился пассажиром у кого-то —
+        # он «пересел за руль», убираем его из чужого карпула и уведомляем того водителя.
+        try:
+            unlinked = self.sheets.unlink_passenger_everywhere(driver.name, except_tgid=tg_id)
+        except Exception:
+            unlinked = None
+        if unlinked:
+            other_tgid, other_name = unlinked
+            try:
+                await context.bot.send_message(
+                    chat_id=other_tgid,
+                    text=(f"ℹ️ {driver.name} вышел из твоего карпула — теперь он сам возит пассажиров.\n"
+                          "Список обновлён."),
+                    reply_markup=self.kb_main(other_tgid),
+                )
+            except Exception:
+                pass
+            await self.log_admin(
+                context, "Auto-unlink (driver became active)",
+                f"{driver.name} убран из карпула {other_name} (tg={other_tgid})", update,
+            )
 
         await self.log_admin(
             context, "Passengers updated",
@@ -1168,3 +1184,108 @@ class BotHandlers:
 
         for i in range(0, len(text), 4000):
             await self._reply(update, text[i:i + 4000], reply_markup=self.kb_main(uid))
+    # ======================================================
+    # Поиск водителя (rideshare) — только для сотрудников
+    # ======================================================
+
+    async def find_driver_start(self, update, context):
+        tg_id = update.effective_user.id
+        verified = context.bot_data.setdefault("verified_searchers", set())
+        if tg_id in verified:
+            return await self._search_ask_mode(update, context)
+        await self._reply(update, t("search.ask_name", tg_id=tg_id))
+        return ST_SEARCH_NAME
+
+    async def search_name(self, update, context):
+        tg_id = update.effective_user.id
+        name = update.message.text.strip()
+        emp = self.sheets.get_employee_by_name(name)
+        if not emp:
+            await self._reply(
+                update, t("search.not_employee", tg_id=tg_id),
+                reply_markup=self.kb_main(tg_id),
+            )
+            return ConversationHandler.END
+        context.bot_data.setdefault("verified_searchers", set()).add(tg_id)
+        return await self._search_ask_mode(update, context)
+
+    async def _search_ask_mode(self, update, context):
+        tg_id = update.effective_user.id
+        kb = ReplyKeyboardMarkup(
+            [[button("btn.by_city", tg_id), button("btn.by_state", tg_id)],
+             [button("btn.cancel", tg_id)]],
+            resize_keyboard=True, one_time_keyboard=True,
+        )
+        await self._reply(update, t("search.choose_mode", tg_id=tg_id), reply_markup=kb)
+        return ST_SEARCH_MODE
+
+    async def search_mode(self, update, context):
+        tg_id = update.effective_user.id
+        txt = update.message.text
+        if is_button(txt, "btn.by_city"):
+            context.user_data["search_mode"] = "city"
+            await self._reply(update, t("search.ask_city", tg_id=tg_id))
+        elif is_button(txt, "btn.by_state"):
+            context.user_data["search_mode"] = "state"
+            await self._reply(update, t("search.ask_state", tg_id=tg_id))
+        else:
+            await self._reply(update, t("search.choose_mode", tg_id=tg_id))
+            return ST_SEARCH_MODE
+        return ST_SEARCH_VALUE
+
+    def _driver_card(self, d) -> str:
+        parts = [f"👤 {d.name}"]
+        if d.car:
+            parts.append(f"🚗 {d.car}")
+        contact = []
+        if d.username:
+            contact.append(f"t.me/{d.username}")
+        if d.phone:
+            contact.append(f"📞 {d.phone}")
+        parts.append(" · ".join(contact) if contact else "контакт не указан")
+        return "\n".join(parts)
+
+    async def search_value(self, update, context):
+        tg_id = update.effective_user.id
+        mode = context.user_data.get("search_mode", "city")
+        raw = update.message.text.strip()
+
+        if mode == "city":
+            resolved = self.sheets.resolve_city(raw)
+            if not resolved:
+                all_cities = [f"{c}, {s}" if s else c for c, s in self.sheets.cities()]
+                sugg = difflib.get_close_matches(raw, all_cities, n=5, cutoff=0.5)
+                msg = t("search.city_not_found", tg_id=tg_id)
+                if sugg:
+                    msg += "\n" + "\n".join(f"• {s}" for s in sugg)
+                await self._reply(update, msg)
+                return ST_SEARCH_VALUE
+            city, state = resolved
+            drivers = self.sheets.find_drivers(city=city)
+            where = f"{city}, {state}" if state else city
+        else:
+            st = raw.strip().upper()
+            states = {s.upper(): s for s in self.sheets.states()}
+            if st not in states:
+                await self._reply(update, t("search.state_not_found", tg_id=tg_id))
+                return ST_SEARCH_VALUE
+            drivers = self.sheets.find_drivers(state=states[st])
+            where = states[st]
+
+        drivers = [d for d in drivers if int(d.tg_id) != int(tg_id)]
+        if not drivers:
+            await self._reply(
+                update, t("search.none", tg_id=tg_id, where=where),
+                reply_markup=self.kb_main(tg_id),
+            )
+            return ConversationHandler.END
+
+        header = t("search.header", tg_id=tg_id, where=where)
+        text = header + "\n\n" + "\n\n".join(self._driver_card(d) for d in drivers)
+        # Telegram лимит 4096 — режем на части
+        for i in range(0, len(text), 4000):
+            await self._reply(
+                update, text[i:i + 4000],
+                reply_markup=self.kb_main(tg_id) if i + 4000 >= len(text) else None,
+            )
+        return ConversationHandler.END

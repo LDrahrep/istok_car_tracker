@@ -2,6 +2,20 @@ STRINGS = {
     # ===== Buttons =====
     "btn.become_driver": "🚗 Become a driver",
     "btn.add_passengers": "👥 Add passengers",
+    "btn.find_driver": "🔍 Find a driver",
+    "btn.by_city": "🏙 By city",
+    "btn.by_state": "🗺 By state",
+    "search.ask_name": "What's your name? Type first and last name — I'll check the employee list.\nExample: Ivan Ivanov",
+    "search.not_employee": "You're not in the employee list — search is for employees only. Contact the admin.",
+    "search.choose_mode": "Search drivers by city or by state?",
+    "search.ask_city": "Type a city (state optional), e.g. San Jose or San Jose, CA",
+    "search.ask_state": "Type a state (2 letters), e.g. CA",
+    "search.city_not_found": "City not found in the list. Try again (e.g. San Jose).",
+    "search.state_not_found": "State not found. Type a 2-letter code, e.g. CA.",
+    "search.none": "No drivers found ({where}).",
+    "search.header": "🚗 Drivers — {where}:",
+    "driver.ask_city": "Which city do you live in? Type the city (e.g. San Jose). Passengers will find you by it.",
+    "driver.city_not_found": "City not found in the directory. Be more precise (e.g. San Jose).",
     "btn.remove_passenger": "🧑‍🤝‍🧑 Remove passenger",
     "btn.my_record": "📋 My record",
     "btn.stop_being_driver": "🛑 Stop being a driver",
@@ -75,6 +89,7 @@ STRINGS = {
     "weekly.unclear": "🤔 Couldn't understand. If the list is correct — tap \"✅ Yes\" or type \"Yes\". If you want to clear it — tap \"❌ No\" or type \"No\".",
     "weekly.error": "❌ Error while clearing. Contact the administrator.",
     "weekly.expired_deleted": "⏰ You didn't respond to the weekly check within 2 hours.\nYour record has been deleted. To restore — press \"🚗 Become a driver\".",
+    "weekly.expired_cleared": "⏰ You didn't respond to the weekly check within 2 hours.\nYour passenger list was cleared. Your driver record is kept — add current passengers via \"👥 Add passengers\".",
 
     # ===== Admin =====
     "admin.not_authorized": "⛔ You don't have access.",

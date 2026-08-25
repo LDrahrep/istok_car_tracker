@@ -11,10 +11,15 @@ class Buttons:
     REMOVE_PASSENGER = "🧑‍🤝‍🧑 Удалить пассажира"
     MY_RECORD = "📋 Моя запись"
     STOP_BEING_DRIVER = "🛑 Перестать быть водителем"
+    FIND_DRIVER = "🔍 Найти водителя"
     CANCEL = "↩️ Назад / Отмена"
 
     YES = "✅ Да"
     NO = "❌ Нет"
+
+    # Поиск водителя (rideshare)
+    BY_CITY = "🏙 По городу"
+    BY_STATE = "🗺 По штату"
 
     ADMIN_WEEKLY_TARGET = "🎯 Проверка пассажиров (точечно)"
     ADMIN_MODE_TGID = "👤 По Telegram ID"
@@ -34,6 +39,9 @@ class Config:
     DRIVERS_SHEET: str = os.getenv("DRIVERS_SHEET", "drivers")
     EMPLOYEES_SHEET: str = os.getenv("EMPLOYEES_SHEET", "employees")
     DRIVERS_PASSENGERS_SHEET: str = os.getenv("DRIVERS_PASSENGERS_SHEET", "drivers_passengers")
+    CITIES_SHEET: str = os.getenv("CITIES_SHEET", "cities")
+
+    PAGE_SIZE: int = int(os.getenv("PAGE_SIZE", "5"))
 
     STATE_FILE: str = os.getenv("STATE_FILE", "bot_state.json")
     CONFIRMATION_TIMEOUT_MINUTES: int = int(os.getenv("CONFIRMATION_TIMEOUT_MINUTES", "30"))

@@ -87,7 +87,14 @@ class Employee:
 
     @staticmethod
     def from_row(row: dict) -> "Employee":
-        tg_raw = (row.get("telegramID") or row.get("telegramid") or "").strip()
+        # DriverTGID = ID водителя, с которым едет сотрудник (переименовано с telegramID).
+        # Старые имена оставлены запасными на случай неполной миграции.
+        tg_raw = (
+            row.get("DriverTGID")
+            or row.get("telegramID")
+            or row.get("telegramid")
+            or ""
+        ).strip()
         tg_id = int(tg_raw) if tg_raw.isdigit() else None
 
         # Колонка с именем может называться "Employee", "Name",
@@ -112,9 +119,13 @@ class Employee:
 class Driver:
     name: str
     tg_id: int
+    username: str = ""
+    phone: str = ""
     car: str = ""
     plates: str = ""
     shift: str = ""
+    city: str = ""
+    state: str = ""
     is_active: bool = True
 
     @staticmethod
@@ -128,9 +139,13 @@ class Driver:
         return Driver(
             name=row.get("Name") or "",
             tg_id=int(tg_raw),
+            username=(row.get("Username") or "").strip(),
+            phone=(row.get("Phone Number") or row.get("Phone") or "").strip(),
             car=row.get("Car") or "",
             plates=row.get("Plates") or "",
             shift=row.get("Shift") or "",
+            city=(row.get("City") or "").strip(),
+            state=(row.get("State") or "").strip(),
             is_active=is_active_raw != "false",
         )
 

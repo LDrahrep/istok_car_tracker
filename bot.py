@@ -33,6 +33,10 @@ from handlers import (
     ST_ADMIN_SHIFT,
     ST_REMOVE_PASSENGER,
     ST_BROADCAST_CONFIRM,
+    ST_DRIVER_CITY,
+    ST_SEARCH_NAME,
+    ST_SEARCH_MODE,
+    ST_SEARCH_VALUE,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -147,6 +151,8 @@ def build_app():
     re_admin_weekly      = f"^({button_regex('btn.admin_weekly_target')})$"
     re_cancel            = f"^({button_regex('btn.cancel')})$"
     re_my_record         = f"^({button_regex('btn.my_record')})$"
+    re_find_driver       = f"^({button_regex('btn.find_driver')})$"
+    re_search_mode       = f"^({button_regex('btn.by_city', 'btn.by_state')})$"
     re_yes_no            = f"^({button_regex('btn.yes', 'btn.no')})$"
 
     conv = ConversationHandler(
@@ -156,6 +162,7 @@ def build_app():
             MessageHandler(filters.Regex(re_add_passengers), handlers.add_passengers_start),
             MessageHandler(filters.Regex(re_stop_being_driver), handlers.stop_being_driver_start),
             MessageHandler(filters.Regex(re_remove_passenger), handlers.remove_passenger_start),
+            MessageHandler(filters.Regex(re_find_driver), handlers.find_driver_start),
             MessageHandler(filters.Regex(re_admin_weekly), handlers.admin_weekly_start),
             CommandHandler("broadcast", handlers.broadcast),
             MessageHandler(filters.Regex(re_cancel), handlers.cancel),
@@ -169,6 +176,18 @@ def build_app():
             ],
             ST_DRIVER_PLATES: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.become_driver_plates)
+            ],
+            ST_DRIVER_CITY: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.become_driver_city)
+            ],
+            ST_SEARCH_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.search_name)
+            ],
+            ST_SEARCH_MODE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.search_mode)
+            ],
+            ST_SEARCH_VALUE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.search_value)
             ],
             ST_ADD_PASSENGERS: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.add_passengers_input)

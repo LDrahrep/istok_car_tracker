@@ -1,0 +1,4 @@
+[settings]
+# Railway/mise иногда не находит GitHub-attestation для сборки Python и падает.
+# Отключаем проверку — установка Python проходит нормально.
+python.github_attestations = false

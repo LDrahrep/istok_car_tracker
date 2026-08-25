@@ -315,8 +315,11 @@ class SheetManager:
             # telegramID обязателен
             col_letter = SheetManager._col_letter(tg_col)
             updates.append({"range": f"{col_letter}{existing}", "values": [[str(driver.tg_id)]]})
+            put("Username", driver.username)
             put("Car", driver.car)
             put("Plates", driver.plates)
+            put("City", driver.city)
+            put("State", driver.state)
             put("isActive", "TRUE" if driver.is_active else "FALSE")
 
             ws.batch_update(updates)
@@ -329,12 +332,16 @@ class SheetManager:
                 row_out[col["Name"]] = driver.name
             row_out[tg_col] = str(driver.tg_id)
 
-            if "Car" in col:
-                row_out[col["Car"]] = driver.car
-            if "Plates" in col:
-                row_out[col["Plates"]] = driver.plates
-            if "isActive" in col:
-                row_out[col["isActive"]] = "TRUE" if driver.is_active else "FALSE"
+            for key, value in (
+                ("Username", driver.username),
+                ("Car", driver.car),
+                ("Plates", driver.plates),
+                ("City", driver.city),
+                ("State", driver.state),
+                ("isActive", "TRUE" if driver.is_active else "FALSE"),
+            ):
+                if key in col:
+                    row_out[col[key]] = value
 
             ws.append_row(row_out, value_input_option="USER_ENTERED")
             self._invalidate(self.config.DRIVERS_SHEET)
@@ -465,7 +472,7 @@ class SheetManager:
         headers = values[0]
         col = self._col_map(headers)
 
-        tg_col = self._col_get(col, "telegramID", "telegramid")
+        tg_col = self._col_get(col, "DriverTGID", "telegramID", "telegramid")
         name_col = self._col_get(col, "Employee", "Name", "")
         rides_col = col.get("Rides with")
 
@@ -524,7 +531,7 @@ class SheetManager:
 
         name_col = self._col_get(col, "Employee", "Name", "")
         rides_col = col.get("Rides with")
-        tg_col = self._col_get(col, "telegramID", "telegramid")
+        tg_col = self._col_get(col, "DriverTGID", "telegramID", "telegramid")
 
         if name_col is None or rides_col is None or tg_col is None:
             return 0
@@ -748,12 +755,24 @@ class SheetManager:
                 warnings.append(f"• {emp.name}: сотрудник в другой смене.")
                 continue
 
-            # Проверка занятости: employees.telegramID и Rides with
+            # --- Двойная роль ---
+            # X может быть зарегистрированным водителем, но если у него НЕТ своих
+            # пассажиров — его можно взять пассажиром (он сейчас сам никого не везёт).
+            # Если у X есть свои пассажиры — нельзя (он активный водитель).
+            x_driver = self.get_driver_by_name(emp.name)
+            x_is_driver = x_driver is not None
+
+            # Проверка занятости: employees.Rides with / DriverTGID.
+            # Self-assignment (X приписан к самому себе как водитель) занятостью НЕ считаем.
             rides_with = (emp.rides_with or "").strip()
             has_driver_id = emp.tg_id is not None
+            self_ref = x_is_driver and (
+                (rides_with and normalize_text(rides_with) == normalize_text(emp.name))
+                or (has_driver_id and int(emp.tg_id) == int(x_driver.tg_id))
+            )
 
-            if rides_with or has_driver_id:
-                # Уже приписан к кому-то
+            if (rides_with or has_driver_id) and not self_ref:
+                # Приписан к КОМУ-ТО другому (реальному водителю)
                 is_mine = (
                     (emp.tg_id is not None and int(emp.tg_id) == int(driver_tgid))
                     or normalize_text(rides_with) == driver_name_norm
@@ -766,17 +785,26 @@ class SheetManager:
                     )
                 continue
 
-            # Вторая линия защиты: проверяем source of truth (drivers_passengers)
+            # X свободен или сам себе водитель. Если это активный водитель со своими
+            # пассажирами — брать пассажиром нельзя.
+            if x_is_driver and self.driver_own_passenger_count(emp.name) >= 1:
+                warnings.append(
+                    f"• {emp.name}: сейчас сам возит пассажиров — его нельзя добавить."
+                )
+                continue
+
+            # Вторая линия защиты: source of truth (drivers_passengers), кроме self.
             hit = self.find_driver_for_passenger(emp.name)
             if hit:
                 other_tgid, other_name = hit
                 if int(other_tgid) == int(driver_tgid):
                     already_assigned.append(emp.name)
-                else:
+                    continue
+                if normalize_text(other_name) != normalize_text(emp.name):
                     warnings.append(
                         f"• {emp.name}: уже записан к другому водителю ({other_name})."
                     )
-                continue
+                    continue
 
             valid.append(emp)
 
@@ -821,7 +849,13 @@ class SheetManager:
 
         Запись водителя НЕ удаляется — удаляются только пассажиры с несовпадающей сменой.
         Возвращает список имён удалённых пассажиров.
+
+        ОТКЛЮЧЕНО: сотрудники часто меняют смены, и авто-очистка удаляла ещё
+        актуальных пассажиров раньше, чем админ успевал обновить данные.
+        Чтобы вернуть прежнее поведение — убери early-return ниже.
         """
+        return []
+
         driver = self.get_driver(driver_tgid)
         if not driver:
             return []
@@ -867,3 +901,132 @@ class SheetManager:
         )
 
         return removed
+    # =========================
+    # Cities (справочник для поиска водителя)
+    # =========================
+
+    def cities(self) -> list[tuple[str, str]]:
+        values = self._values(self.config.CITIES_SHEET)
+        if not values or len(values) < 2:
+            return []
+        col = self._col_map(values[0])
+        c_city, c_state = col.get("City"), col.get("State")
+        if c_city is None:
+            return []
+        out, seen = [], set()
+        for row in values[1:]:
+            city = (row[c_city] if c_city < len(row) else "").strip()
+            state = (row[c_state] if c_state is not None and c_state < len(row) else "").strip()
+            if not city:
+                continue
+            key = (normalize_text(city), normalize_text(state))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((city, state))
+        return out
+
+    def states(self) -> list[str]:
+        out, seen = [], set()
+        for _, state in self.cities():
+            if state and normalize_text(state) not in seen:
+                seen.add(normalize_text(state))
+                out.append(state)
+        return out
+
+    def resolve_city(self, raw: str) -> Optional[tuple[str, str]]:
+        n = normalize_text(raw)
+        for city, state in self.cities():
+            if normalize_text(city) == n or normalize_text(f"{city}, {state}") == n:
+                return city, state
+        return None
+
+    def state_of_city(self, city: str) -> str:
+        n = normalize_text(city)
+        for c, s in self.cities():
+            if normalize_text(c) == n:
+                return s
+        return ""
+
+    # =========================
+    # Drivers: полный список и поиск по городу/штату
+    # =========================
+
+    def all_active_drivers(self) -> list[Driver]:
+        values = self._values(self.config.DRIVERS_SHEET)
+        if not values or len(values) < 2:
+            return []
+        headers = values[0]
+        out = []
+        for row in values[1:]:
+            try:
+                d = Driver.from_row(self._row_dict(headers, row))
+            except Exception:
+                continue
+            if d.is_active and d.name:
+                out.append(d)
+        return out
+
+    def find_drivers(self, *, city: str = "", state: str = "") -> list[Driver]:
+        drivers = self.all_active_drivers()
+        if state:
+            n = normalize_text(state)
+            drivers = [d for d in drivers if normalize_text(d.state) == n]
+        elif city:
+            n = normalize_text(city)
+            drivers = [d for d in drivers if normalize_text(d.city) == n]
+        else:
+            return []
+        return drivers
+
+    def get_driver_by_name(self, name: str) -> Optional[Driver]:
+        """Найти запись водителя по имени (нормализованно). Для проверки двойной роли."""
+        n = normalize_text(name)
+        values = self._values(self.config.DRIVERS_SHEET)
+        if not values or len(values) < 2:
+            return None
+        headers = values[0]
+        col = self._col_map(headers)
+        name_col = col.get("Name")
+        if name_col is None:
+            return None
+        for row in values[1:]:
+            if name_col < len(row) and normalize_text(row[name_col]) == n:
+                try:
+                    return Driver.from_row(self._row_dict(headers, row))
+                except Exception:
+                    return None
+        return None
+
+    def driver_own_passenger_count(self, name: str) -> int:
+        """Сколько СВОИХ пассажиров у водителя с этим именем (0, если не водитель)."""
+        d = self.get_driver_by_name(name)
+        if not d:
+            return 0
+        dp = self.get_driver_passengers(d.tg_id)
+        return len(dp.passengers) if dp else 0
+
+    def unlink_passenger_everywhere(self, passenger_name: str, *, except_tgid: int) -> Optional[tuple[int, str]]:
+        """Убрать пассажира из карпула ЛЮБОГО другого водителя (кроме except_tgid).
+        Возвращает (tgid, имя) прежнего водителя, у кого убрали, или None.
+        Нужно для авто-отвязки: X «пересел за руль»."""
+        hit = self.find_driver_for_passenger(passenger_name)
+        if not hit:
+            return None
+        other_tgid, other_name = hit
+        if int(other_tgid) == int(except_tgid):
+            return None
+        # не считаем self-assignment (X приписан к себе) за карпул
+        if normalize_text(other_name) == normalize_text(passenger_name):
+            return None
+        dp = self.get_driver_passengers(other_tgid)
+        if not dp:
+            return None
+        n = normalize_text(passenger_name)
+        kept = [p for p in dp.passengers if normalize_text(p) != n]
+        if len(kept) == len(dp.passengers):
+            return None
+        dp.passengers = kept
+        self.upsert_driver_passengers(dp)
+        self.clear_rides_with(names={passenger_name})
+        return other_tgid, other_name

@@ -157,12 +157,10 @@ EXPIRE_TIMEOUT_SECONDS = 2 * 60 * 60  # 2 часа
 
 
 async def expire_unanswered(bot, sheets, state, config):
-    """Удалить водителей, которые не ответили на weekly check за 2 часа.
+    """Не ответил на weekly check за 2 часа → чистим ТОЛЬКО его пассажиров.
 
-    Порядок удаления тот же, что в stop_being_driver_confirm:
-      1. drivers_passengers (source of truth — чтобы GAS не вернул данные)
-      2. drivers
-      3. clear_rides_with (employees: Rides with + telegramID)
+    ИЗМЕНЕНО: запись водителя (машина, город, номера) НЕ удаляется — обнуляется
+    лишь его список пассажиров (как ответ «Нет»), а Rides with пассажиров сбрасывается.
     """
     expired = state.get_expired(EXPIRE_TIMEOUT_SECONDS)
     if not expired:
@@ -176,26 +174,22 @@ async def expire_unanswered(bot, sheets, state, config):
 
     for tg_id, shift in expired:
         try:
-            dp_backup = sheets.get_driver_passengers(tg_id)
-            driver_backup = sheets.get_driver(tg_id)
-            passenger_names = set(dp_backup.passengers) if dp_backup else set()
-            driver_name = dp_backup.driver_name if dp_backup else (driver_backup.name if driver_backup else "")
-            all_names = passenger_names | ({driver_name} if driver_name else set())
+            dp = sheets.get_driver_passengers(tg_id)
+            old_passengers = list(dp.passengers) if dp else []
 
-            try:
-                sheets.delete_driver_passengers(tg_id)
-                sheets.delete_driver(tg_id)
-                sheets.clear_rides_with(names=all_names)
-            except Exception as e:
-                # Откат при частичном сбое
+            if dp and old_passengers:
+                dp.passengers = []
                 try:
-                    if dp_backup:
-                        sheets.upsert_driver_passengers(dp_backup)
-                    if driver_backup:
-                        sheets.upsert_driver(driver_backup)
-                except Exception:
-                    pass
-                raise e
+                    sheets.upsert_driver_passengers(dp)
+                    sheets.clear_rides_with(names=set(old_passengers))
+                except Exception as e:
+                    # Откат: восстанавливаем список пассажиров
+                    try:
+                        dp.passengers = old_passengers
+                        sheets.upsert_driver_passengers(dp)
+                    except Exception:
+                        pass
+                    raise e
 
             state.remove_pending(tg_id)
             removed += 1
@@ -203,7 +197,7 @@ async def expire_unanswered(bot, sheets, state, config):
             try:
                 await bot.send_message(
                     chat_id=tg_id,
-                    text=t("weekly.expired_deleted", tg_id=tg_id),
+                    text=t("weekly.expired_cleared", tg_id=tg_id),
                 )
             except Exception:
                 pass
@@ -213,8 +207,8 @@ async def expire_unanswered(bot, sheets, state, config):
                     await bot.send_message(
                         chat_id=config.ADMIN_CHAT_ID,
                         text=(
-                            f"⏰ Expire: удалён водитель tg_id={tg_id} "
-                            f"shift={shift} passengers={len(passenger_names)}"
+                            f"⏰ Expire: очищены пассажиры водителя tg_id={tg_id} "
+                            f"shift={shift} было={len(old_passengers)} (водитель сохранён)"
                         ),
                     )
                 except Exception:
