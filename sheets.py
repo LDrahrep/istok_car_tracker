@@ -935,11 +935,33 @@ class SheetManager:
         return out
 
     def resolve_city(self, raw: str) -> Optional[tuple[str, str]]:
+        # Оставлено для обратной совместимости: одно совпадение или None.
+        matches = self.find_cities(raw)
+        return matches[0] if len(matches) == 1 else None
+
+    def find_cities(self, raw: str) -> list[tuple[str, str]]:
+        """Все совпадения по вводу.
+        - «San Jose, CA» / «Springfield IL» → точный (город + штат).
+        - «Springfield» (без штата) → все пары с этим городом (может быть >1 → уточнять штат).
+        - нет совпадений → [].
+        """
         n = normalize_text(raw)
-        for city, state in self.cities():
-            if normalize_text(city) == n or normalize_text(f"{city}, {state}") == n:
-                return city, state
-        return None
+        all_c = self.cities()
+        # 1) ввод с штатом: последний токен — 2 буквы
+        parts = n.replace(",", " ").split()
+        if len(parts) >= 2 and len(parts[-1]) == 2:
+            st = parts[-1]
+            city_part = " ".join(parts[:-1])
+            exact = [(c, s) for c, s in all_c
+                     if normalize_text(c) == city_part and normalize_text(s) == st]
+            if exact:
+                return exact
+        # 2) полное «city, state» как есть
+        exact2 = [(c, s) for c, s in all_c if normalize_text(f"{c}, {s}") == n]
+        if exact2:
+            return exact2
+        # 3) по названию города (может дать несколько штатов)
+        return [(c, s) for c, s in all_c if normalize_text(c) == n]
 
     def state_of_city(self, city: str) -> str:
         n = normalize_text(city)

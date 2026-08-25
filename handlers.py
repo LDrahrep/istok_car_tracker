@@ -263,8 +263,8 @@ class BotHandlers:
     async def become_driver_city(self, update, context):
         tg_id = update.effective_user.id
         raw = update.message.text.strip()
-        resolved = self.sheets.resolve_city(raw)
-        if not resolved:
+        matches = self.sheets.find_cities(raw)
+        if not matches:
             all_cities = [f"{c}, {s}" if s else c for c, s in self.sheets.cities()]
             suggestions = difflib.get_close_matches(raw, all_cities, n=5, cutoff=0.5)
             msg = t("driver.city_not_found", tg_id=tg_id)
@@ -272,8 +272,15 @@ class BotHandlers:
                 msg += "\n" + "\n".join(f"• {s}" for s in suggestions)
             await self._reply(update, msg)
             return ST_DRIVER_CITY
+        if len(matches) > 1:
+            states = ", ".join(s for _, s in matches)
+            await self._reply(update, t(
+                "city.ambiguous", tg_id=tg_id, city=matches[0][0],
+                states=states, example=f"{matches[0][0]}, {matches[0][1]}",
+            ))
+            return ST_DRIVER_CITY
 
-        city, state = resolved
+        city, state = matches[0]
         driver = Driver(
             name=context.user_data["driver_name"],
             tg_id=tg_id,
@@ -1251,8 +1258,8 @@ class BotHandlers:
         raw = update.message.text.strip()
 
         if mode == "city":
-            resolved = self.sheets.resolve_city(raw)
-            if not resolved:
+            matches = self.sheets.find_cities(raw)
+            if not matches:
                 all_cities = [f"{c}, {s}" if s else c for c, s in self.sheets.cities()]
                 sugg = difflib.get_close_matches(raw, all_cities, n=5, cutoff=0.5)
                 msg = t("search.city_not_found", tg_id=tg_id)
@@ -1260,7 +1267,14 @@ class BotHandlers:
                     msg += "\n" + "\n".join(f"• {s}" for s in sugg)
                 await self._reply(update, msg)
                 return ST_SEARCH_VALUE
-            city, state = resolved
+            if len(matches) > 1:
+                states = ", ".join(s for _, s in matches)
+                await self._reply(update, t(
+                    "city.ambiguous", tg_id=tg_id, city=matches[0][0],
+                    states=states, example=f"{matches[0][0]}, {matches[0][1]}",
+                ))
+                return ST_SEARCH_VALUE
+            city, state = matches[0]
             drivers = self.sheets.find_drivers(city=city)
             where = f"{city}, {state}" if state else city
         else:

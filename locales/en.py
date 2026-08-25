@@ -15,6 +15,7 @@ STRINGS = {
     "search.none": "No drivers found ({where}).",
     "search.header": "🚗 Drivers — {where}:",
     "driver.ask_city": "Which city do you live in? Type the city (e.g. San Jose). Passengers will find you by it.",
+    "city.ambiguous": "The city \"{city}\" exists in several states: {states}.\nPlease specify — type, e.g.: {example}",
     "driver.city_not_found": "City not found in the directory. Be more precise (e.g. San Jose).",
     "btn.remove_passenger": "🧑‍🤝‍🧑 Remove passenger",
     "btn.my_record": "📋 My record",

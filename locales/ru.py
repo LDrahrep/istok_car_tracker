@@ -15,6 +15,7 @@ STRINGS = {
     "search.none": "Водителей не найдено ({where}).",
     "search.header": "🚗 Водители — {where}:",
     "driver.ask_city": "В каком городе ты живёшь? Напиши город (например San Jose). Пассажиры найдут тебя по нему.",
+    "city.ambiguous": "Город «{city}» есть в нескольких штатах: {states}.\nУточни — напиши, например: {example}",
     "driver.city_not_found": "Город не найден в справочнике. Напиши точнее (например San Jose).",
     "btn.remove_passenger": "🧑‍🤝‍🧑 Удалить пассажира",
     "btn.my_record": "📋 Моя запись",
