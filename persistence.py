@@ -39,16 +39,31 @@ class StateManager:
             self.state = BotState()
 
     def _save(self):
-        with open(self.filepath, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "pending_confirmations": self.state.pending_confirmations,
-                    "user_languages": self.state.user_languages,
-                },
-                f,
-                ensure_ascii=False,
-                indent=2,
-            )
+        # Создаём папку (важно для persistent volume, напр. /data) и пишем
+        # атомарно (temp + rename), чтобы файл не побился при сбое/рестарте.
+        import tempfile
+
+        payload = {
+            "pending_confirmations": self.state.pending_confirmations,
+            "user_languages": self.state.user_languages,
+        }
+        directory = os.path.dirname(self.filepath)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+
+        fd, tmp = tempfile.mkstemp(dir=directory or ".", prefix=".botstate_", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.filepath)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+            raise
 
     def is_pending(self, tg_id: int) -> bool:
         return str(tg_id) in self.state.pending_confirmations
