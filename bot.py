@@ -155,6 +155,16 @@ def build_app():
     re_search_mode       = f"^({button_regex('btn.by_city', 'btn.by_state')})$"
     re_yes_no            = f"^({button_regex('btn.yes', 'btn.no')})$"
 
+    # Кнопки меню-действий: на текстовых шагах их НЕ глотаем как ввод, а даём
+    # перехватить (entry_points перезапустят действие через allow_reentry,
+    # «Моя запись»/«Отмена» уйдут своим обработчикам).
+    re_menu = "^(" + button_regex(
+        "btn.become_driver", "btn.add_passengers", "btn.my_record",
+        "btn.stop_being_driver", "btn.remove_passenger", "btn.find_driver",
+        "btn.admin_weekly_target", "btn.cancel",
+    ) + ")$"
+    not_menu = ~filters.Regex(re_menu)
+
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", handlers.start),
@@ -169,46 +179,46 @@ def build_app():
         ],
         states={
             ST_DRIVER_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.become_driver_name)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.become_driver_name)
             ],
             ST_DRIVER_CAR: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.become_driver_car)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.become_driver_car)
             ],
             ST_DRIVER_PLATES: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.become_driver_plates)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.become_driver_plates)
             ],
             ST_DRIVER_CITY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.become_driver_city)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.become_driver_city)
             ],
             ST_SEARCH_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.search_name)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.search_name)
             ],
             ST_SEARCH_MODE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.search_mode)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.search_mode)
             ],
             ST_SEARCH_VALUE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.search_value)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.search_value)
             ],
             ST_ADD_PASSENGERS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.add_passengers_input)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.add_passengers_input)
             ],
             ST_STOP_CONFIRM: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.stop_being_driver_confirm)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.stop_being_driver_confirm)
             ],
             ST_REMOVE_PASSENGER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.remove_passenger_input)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.remove_passenger_input)
             ],
             ST_ADMIN_MODE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_mode)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.admin_mode)
             ],
             ST_ADMIN_TGID: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_tgid)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.admin_tgid)
             ],
             ST_ADMIN_SHIFT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_shift)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.admin_shift)
             ],
             ST_BROADCAST_CONFIRM: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.broadcast_confirm)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.broadcast_confirm)
             ],
         },
         fallbacks=[
