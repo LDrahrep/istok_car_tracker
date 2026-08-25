@@ -193,7 +193,7 @@ def build_app():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.add_passengers_input)
             ],
             ST_STOP_CONFIRM: [
-                MessageHandler(filters.Regex(re_yes_no), handlers.stop_being_driver_confirm)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.stop_being_driver_confirm)
             ],
             ST_REMOVE_PASSENGER: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.remove_passenger_input)
@@ -208,7 +208,7 @@ def build_app():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.admin_shift)
             ],
             ST_BROADCAST_CONFIRM: [
-                MessageHandler(filters.Regex(re_yes_no), handlers.broadcast_confirm)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.broadcast_confirm)
             ],
         },
         fallbacks=[

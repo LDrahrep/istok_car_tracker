@@ -37,6 +37,25 @@ logger = logging.getLogger(__name__)
 ) = range(20, 34)
 
 
+# Полные названия штатов США → 2-буквенный код (чтобы понимать «California» = CA).
+US_STATE_NAMES = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+    "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
+    "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID",
+    "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+    "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+    "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS",
+    "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV",
+    "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+    "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+    "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+    "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
+    "vermont": "VT", "virginia": "VA", "washington": "WA", "west virginia": "WV",
+    "wisconsin": "WI", "wyoming": "WY", "district of columbia": "DC",
+    "washington dc": "DC", "washington d.c.": "DC",
+}
+
+
 class BotHandlers:
     def __init__(self, config, sheets):
         self.config = config
@@ -387,8 +406,17 @@ class BotHandlers:
 
     async def stop_being_driver_confirm(self, update, context):
         tg_id = update.effective_user.id
+        intent = parse_yes_no_intent(update.message.text or "")
 
-        if is_button(update.message.text, "btn.yes"):
+        if intent == "unclear":
+            await self._reply(
+                update,
+                "Не понял ответ 🤔 Нажми «✅ Да» или «❌ Нет» (или напиши «да» / «нет»).",
+                reply_markup=self.kb_yes_no(update.effective_user.id),
+            )
+            return ST_STOP_CONFIRM
+
+        if intent == "yes":
             # Сохраняем бэкапы ДО удаления для возможного отката
             dp_backup = self.sheets.get_driver_passengers(tg_id)
             driver_backup = self.sheets.get_driver(tg_id)
@@ -1068,7 +1096,15 @@ class BotHandlers:
         if uid not in self.config.ADMIN_USER_IDS:
             return ConversationHandler.END
 
-        if not is_button(update.message.text, "btn.yes"):
+        intent = parse_yes_no_intent(update.message.text or "")
+        if intent == "unclear":
+            await self._reply(
+                update,
+                "Не понял. Нажми «✅ Да» для отправки или «❌ Нет» для отмены (можно написать «да»/«нет»).",
+                reply_markup=self.kb_yes_no(uid),
+            )
+            return ST_BROADCAST_CONFIRM
+        if intent == "no":
             await self._reply(
                 update,
                 t("admin.broadcast_cancelled", tg_id=uid),
@@ -1228,11 +1264,12 @@ class BotHandlers:
 
     async def search_mode(self, update, context):
         tg_id = update.effective_user.id
-        txt = update.message.text
-        if is_button(txt, "btn.by_city"):
+        txt = update.message.text or ""
+        low = txt.casefold()
+        if is_button(txt, "btn.by_city") or "город" in low or "city" in low:
             context.user_data["search_mode"] = "city"
             await self._reply(update, t("search.ask_city", tg_id=tg_id))
-        elif is_button(txt, "btn.by_state"):
+        elif is_button(txt, "btn.by_state") or "штат" in low or "state" in low:
             context.user_data["search_mode"] = "state"
             await self._reply(update, t("search.ask_state", tg_id=tg_id))
         else:
@@ -1278,13 +1315,14 @@ class BotHandlers:
             drivers = self.sheets.find_drivers(city=city)
             where = f"{city}, {state}" if state else city
         else:
-            st = raw.strip().upper()
+            # Принимаем и 2-буквенный код (CA), и полное название (California).
+            code = US_STATE_NAMES.get(raw.strip().casefold(), raw.strip().upper())
             states = {s.upper(): s for s in self.sheets.states()}
-            if st not in states:
+            if code not in states:
                 await self._reply(update, t("search.state_not_found", tg_id=tg_id))
                 return ST_SEARCH_VALUE
-            drivers = self.sheets.find_drivers(state=states[st])
-            where = states[st]
+            drivers = self.sheets.find_drivers(state=states[code])
+            where = states[code]
 
         drivers = [d for d in drivers if int(d.tg_id) != int(tg_id)]
         if not drivers:
