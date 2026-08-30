@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \":*)",
+      "Bash(python -c \":*)",
+      "Bash(PYTHONIOENCODING=utf-8 python -c \":*)",
+      "Bash(start \"\" \"C:/Users/minya/OneDrive/Рабочий стол/DH_Builder/docs/er_diagram.html\")"
+    ]
+  }
+}
