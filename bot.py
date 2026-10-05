@@ -153,8 +153,8 @@ def build_app():
             return
 
         payload = ""
-        if update.message and update.message.text:
-            payload = update.message.text
+        if update.effective_message and update.effective_message.text:
+            payload = update.effective_message.text
         elif update.callback_query and update.callback_query.data:
             payload = f"[callback] {update.callback_query.data}"
         else:

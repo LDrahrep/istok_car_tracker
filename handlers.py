@@ -128,8 +128,16 @@ class BotHandlers:
         We intentionally do NOT use Markdown/HTML parse modes because user-provided
         data (names, plates, usernames) may contain characters that break entity
         parsing in Telegram and crash the bot.
+
+        effective_message, а не message: при РЕДАКТИРОВАНИИ сообщения Telegram
+        присылает edited_message, и update.message оказывается None — команда
+        падала с AttributeError вместо ответа.
         """
-        return await update.message.reply_text(text, **kwargs)
+        message = update.effective_message
+        if message is None:
+            logger.warning("нет effective_message, отвечать некуда: %s", text[:80])
+            return None
+        return await message.reply_text(text, **kwargs)
 
 
     def _throttle(self, context: ContextTypes.DEFAULT_TYPE, key: str, seconds: int) -> bool:
@@ -155,8 +163,8 @@ class BotHandlers:
             return
 
         txt = ""
-        if update.message and update.message.text:
-            txt = update.message.text
+        if update.effective_message and update.effective_message.text:
+            txt = update.effective_message.text
 
         # Антифлуд: не чаще 1 unknown/20сек на пользователя
         if not self._throttle(context, f"unknown:{u.id}", 20):
@@ -169,7 +177,7 @@ class BotHandlers:
             update,
         )
 
-        if update.message:
+        if update.effective_message:
             await self._reply(
                 update,
                 "Я не понял сообщение 🤔\nИспользуй кнопки на клавиатуре или команду /start",
@@ -223,7 +231,7 @@ class BotHandlers:
 
     async def become_driver_name(self, update, context):
         tg_id = update.effective_user.id
-        name = update.message.text.strip()
+        name = update.effective_message.text.strip()
         emp = self.sheets.get_employee_by_name(name)
         if not emp:
             # Попробуем предложить похожие имена
@@ -270,18 +278,18 @@ class BotHandlers:
         return ST_DRIVER_CAR
 
     async def become_driver_car(self, update, context):
-        context.user_data["driver_car"] = update.message.text.strip()
+        context.user_data["driver_car"] = update.effective_message.text.strip()
         await self._reply(update, "Licence Plates?\nПример: ABC123")
         return ST_DRIVER_PLATES
 
     async def become_driver_plates(self, update, context):
-        context.user_data["driver_plates"] = update.message.text.strip()
+        context.user_data["driver_plates"] = update.effective_message.text.strip()
         await self._reply(update, t("driver.ask_city", tg_id=update.effective_user.id))
         return ST_DRIVER_CITY
 
     async def become_driver_city(self, update, context):
         tg_id = update.effective_user.id
-        raw = update.message.text.strip()
+        raw = update.effective_message.text.strip()
         matches = self.sheets.find_cities(raw)
         if not matches:
             all_cities = [f"{c}, {s}" if s else c for c, s in self.sheets.cities()]
@@ -406,7 +414,7 @@ class BotHandlers:
 
     async def stop_being_driver_confirm(self, update, context):
         tg_id = update.effective_user.id
-        intent = parse_yes_no_intent(update.message.text or "")
+        intent = parse_yes_no_intent(update.effective_message.text or "")
 
         if intent == "unclear":
             await self._reply(
@@ -518,7 +526,7 @@ class BotHandlers:
         tg_id = update.effective_user.id
         names = [
             x.strip()
-            for x in update.message.text.splitlines()
+            for x in update.effective_message.text.splitlines()
             if x.strip()
         ]
 
@@ -689,7 +697,7 @@ class BotHandlers:
 
     async def remove_passenger_input(self, update, context):
         tg_id = update.effective_user.id
-        chosen = update.message.text.strip()
+        chosen = update.effective_message.text.strip()
 
         # Получаем актуальный список из sheets (не из кэша user_data)
         dp = self.sheets.get_driver_passengers(tg_id)
@@ -806,7 +814,7 @@ class BotHandlers:
         if not state.is_pending(tg_id):
             return
 
-        text = update.message.text or ""
+        text = update.effective_message.text or ""
         intent = parse_yes_no_intent(text)
 
         if intent == "yes":
@@ -911,7 +919,7 @@ class BotHandlers:
         return ST_ADMIN_MODE
 
     async def admin_mode(self, update, context):
-        txt = update.message.text
+        txt = update.effective_message.text
         uid = update.effective_user.id
 
         if is_button(txt, "btn.admin_mode_tgid"):
@@ -937,7 +945,7 @@ class BotHandlers:
         return ConversationHandler.END
 
     async def admin_tgid(self, update, context):
-        raw = update.message.text.strip()
+        raw = update.effective_message.text.strip()
         uid = update.effective_user.id
 
         if not raw.isdigit():
@@ -973,7 +981,7 @@ class BotHandlers:
         return ConversationHandler.END
 
     async def admin_shift(self, update, context):
-        txt = update.message.text
+        txt = update.effective_message.text
         if is_button(txt, "btn.shift_day"):
             shift = ShiftType.DAY
         elif is_button(txt, "btn.shift_night"):
@@ -1096,7 +1104,7 @@ class BotHandlers:
         if uid not in self.config.ADMIN_USER_IDS:
             return ConversationHandler.END
 
-        intent = parse_yes_no_intent(update.message.text or "")
+        intent = parse_yes_no_intent(update.effective_message.text or "")
         if intent == "unclear":
             await self._reply(
                 update,
@@ -1241,7 +1249,7 @@ class BotHandlers:
 
     async def search_name(self, update, context):
         tg_id = update.effective_user.id
-        name = update.message.text.strip()
+        name = update.effective_message.text.strip()
         emp = self.sheets.get_employee_by_name(name)
         if not emp:
             await self._reply(
@@ -1264,7 +1272,7 @@ class BotHandlers:
 
     async def search_mode(self, update, context):
         tg_id = update.effective_user.id
-        txt = update.message.text or ""
+        txt = update.effective_message.text or ""
         low = txt.casefold()
         if is_button(txt, "btn.by_city") or "город" in low or "city" in low:
             context.user_data["search_mode"] = "city"
@@ -1292,7 +1300,7 @@ class BotHandlers:
     async def search_value(self, update, context):
         tg_id = update.effective_user.id
         mode = context.user_data.get("search_mode", "city")
-        raw = update.message.text.strip()
+        raw = update.effective_message.text.strip()
 
         if mode == "city":
             matches = self.sheets.find_cities(raw)
