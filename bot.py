@@ -40,6 +40,8 @@ from handlers import (
     ST_SEARCH_NAME,
     ST_SEARCH_MODE,
     ST_SEARCH_VALUE,
+    ST_LEAVE_NAME,
+    ST_LEAVE_CONFIRM,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -200,6 +202,8 @@ def build_app():
     re_admin_weekly      = f"^({button_regex('btn.admin_weekly_target')})$"
     re_cancel            = f"^({button_regex('btn.cancel')})$"
     re_my_record         = f"^({button_regex('btn.my_record')})$"
+    re_help              = f"^({button_regex('btn.help')})$"
+    re_leave_carpool     = f"^({button_regex('btn.leave_carpool')})$"
     re_find_driver       = f"^({button_regex('btn.find_driver')})$"
     re_search_mode       = f"^({button_regex('btn.by_city', 'btn.by_state')})$"
     re_yes_no            = f"^({button_regex('btn.yes', 'btn.no')})$"
@@ -211,6 +215,7 @@ def build_app():
         "btn.become_driver", "btn.add_passengers", "btn.my_record",
         "btn.stop_being_driver", "btn.remove_passenger", "btn.find_driver",
         "btn.admin_weekly_target", "btn.cancel",
+        "btn.help", "btn.leave_carpool",
     ) + ")$"
     not_menu = ~filters.Regex(re_menu)
 
@@ -222,6 +227,7 @@ def build_app():
             MessageHandler(filters.Regex(re_stop_being_driver), handlers.stop_being_driver_start),
             MessageHandler(filters.Regex(re_remove_passenger), handlers.remove_passenger_start),
             MessageHandler(filters.Regex(re_find_driver), handlers.find_driver_start),
+            MessageHandler(filters.Regex(re_leave_carpool), handlers.leave_carpool_start),
             MessageHandler(filters.Regex(re_admin_weekly), handlers.admin_weekly_start),
             CommandHandler("broadcast", handlers.broadcast),
             MessageHandler(filters.Regex(re_cancel), handlers.cancel),
@@ -247,6 +253,12 @@ def build_app():
             ],
             ST_SEARCH_VALUE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.search_value)
+            ],
+            ST_LEAVE_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.leave_carpool_name)
+            ],
+            ST_LEAVE_CONFIRM: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.leave_carpool_confirm)
             ],
             ST_ADD_PASSENGERS: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.add_passengers_input)
@@ -282,6 +294,8 @@ def build_app():
     app.add_handler(conv)
 
     app.add_handler(MessageHandler(filters.Regex(re_my_record), handlers.my_record))
+    app.add_handler(MessageHandler(filters.Regex(re_help), handlers.help_command))
+    app.add_handler(CommandHandler("help", handlers.help_command))
 
     app.add_handler(CommandHandler("broadcast_keyboard", handlers.broadcast_keyboard))
     app.add_handler(CommandHandler("report", handlers.report_command))

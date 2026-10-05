@@ -1,4 +1,24 @@
 STRINGS = {
+    # ===== Роли, помощь, открепление =====
+    'leave.error': "❌ Couldn't detach you. Try again or contact your administrator.",
+    'btn.leave_carpool': '🚶 I no longer ride with my driver',
+    'btn.help': '❓ Help',
+    'leave.ask_name': "Type your first and last name — I'll find who you're assigned to.\n\nExample: Ivan Ivanov",
+    'leave.not_employee': "I couldn't find that employee in the list.\n\nCheck the spelling or contact your administrator.",
+    'leave.not_in_carpool': "You're not assigned to any driver — nothing to detach.\n\nIf someone should be driving you, ask them to add you through the bot.",
+    'leave.confirm': 'You currently ride with {driver}.\n\nDetach from them?',
+    'leave.done': "Done — you're no longer assigned to {driver}.\n\nAny other driver can now add you to their car.",
+    'leave.cancelled': 'Nothing changed — you still ride with {driver}.',
+    'leave.driver_notice': 'ℹ️ {passenger} detached and no longer rides with you.\n\nIf that\'s a mistake, add them back via "{button}".',
+    'validate.taken_hint': 'They can detach themselves — the "{button}" button in the bot.',
+    'help.header': '❓ How to use this bot',
+    'help.driver': 'You are registered as a driver.\n\n👥 Add passengers — list the people you drive. Up to 4, one per line.\n🧑\u200d🤝\u200d🧑 Remove passenger — take one off the list.\n📋 My record — your details and current list.\n🔍 Find a driver — fellow drivers in your city.\n🛑 Stop being a driver — if you no longer drive.\n\n⏰ Once a week I\'ll ask whether your list is still correct. Answer "Yes" or "No" — this matters: with no answer the list is cleared automatically after 2 hours.\n\n💰 A day counts if you were marked present on the timesheet and have at least two passengers listed.',
+    'help.passenger': 'You\'re using the bot as a passenger.\n\n🚗 Become a driver — if you drive colleagues in your own car.\n🔍 Find a driver — see who drives from your city.\n📋 My record — whether you\'re assigned to anyone.\n🚶 I no longer ride with my driver — detach so another driver can pick you up.\n\nTo get a ride, ask a driver to add you — they do it with the "Add passengers" button.',
+    'help.footer': 'Language: /russian · /english\nSomething not working — message your administrator.',
+    'start.greeting': 'Hi! I keep track of drivers and passengers.\n\n{role_hint}\n\nPick an action with the buttons below, and tap "❓ Help" if anything is unclear.',
+    'start.role_driver': 'You are registered as a driver.',
+    'start.role_passenger': 'You\'re not a driver yet. If you drive colleagues, tap "🚗 Become a driver".',
+
     # ===== Buttons =====
     "btn.become_driver": "🚗 Become a driver",
     "btn.add_passengers": "👥 Add passengers",

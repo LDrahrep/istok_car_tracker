@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
     ST_SEARCH_NAME,
     ST_SEARCH_MODE,
     ST_SEARCH_VALUE,
-) = range(20, 34)
+    ST_LEAVE_NAME,
+    ST_LEAVE_CONFIRM,
+) = range(20, 36)
 
 
 # Полные названия штатов США → 2-буквенный код (чтобы понимать «California» = CA).
@@ -60,6 +62,36 @@ class BotHandlers:
     def __init__(self, config, sheets):
         self.config = config
         self.sheets = sheets
+        # tg_id -> (момент, водитель ли). Меню зависит от роли, но определять
+        # её запросом к Google на каждый ответ нельзя: лимит 60 запросов в
+        # минуту мы и так почти выбираем еженедельной рассылкой. Поэтому роль
+        # запоминается, когда она и так выяснилась по ходу дела, а если
+        # неизвестна — показываем полное меню, как раньше.
+        self._role_cache: dict[int, tuple[float, bool]] = {}
+
+    _ROLE_TTL = 15 * 60
+
+    def remember_role(self, tg_id: int | None, is_driver: bool) -> None:
+        if tg_id is not None:
+            self._role_cache[tg_id] = (time.time(), is_driver)
+
+    def remember_role_and_check(self, tg_id: int) -> bool:
+        """Есть ли запись водителя — и сразу запоминаем роль для меню."""
+        is_driver = self.sheets.get_driver(tg_id) is not None
+        self.remember_role(tg_id, is_driver)
+        return is_driver
+
+    def known_role(self, tg_id: int | None) -> Optional[bool]:
+        if tg_id is None:
+            return None
+        entry = self._role_cache.get(tg_id)
+        if not entry:
+            return None
+        stamp, is_driver = entry
+        if time.time() - stamp > self._ROLE_TTL:
+            self._role_cache.pop(tg_id, None)
+            return None
+        return is_driver
 
     # ======================================================
     # Utility
@@ -97,23 +129,48 @@ class BotHandlers:
         except Exception:
             pass
 
-    def kb_main(self, user_id: int | None = None):
-        keyboard = [
-            [button("btn.become_driver", user_id), button("btn.add_passengers", user_id)],
-            [button("btn.my_record", user_id), button("btn.stop_being_driver", user_id)],
-            [button("btn.remove_passenger", user_id), button("btn.find_driver", user_id)],
-        ]
+    def kb_main(self, user_id: int | None = None, is_driver: Optional[bool] = None):
+        """Главное меню под роль пользователя.
 
-        # Админскую кнопку показываем только администраторам
+        Раньше клавиатура была одна на всех: водители видели «Стать
+        водителем», а пассажиры — «Добавить пассажиров» и упирались в
+        «Ты не зарегистрирован как водитель». Теперь человек видит только то,
+        что ему доступно.
+
+        Роль берём из кэша; если она неизвестна — показываем полный набор,
+        чтобы ничего не пропало.
+        """
+        if is_driver is None:
+            is_driver = self.known_role(user_id)
+
+        b = lambda key: button(key, user_id)
+
+        if is_driver is True:
+            keyboard = [
+                [b("btn.add_passengers"), b("btn.remove_passenger")],
+                [b("btn.my_record"), b("btn.find_driver")],
+                [b("btn.stop_being_driver")],
+            ]
+        elif is_driver is False:
+            keyboard = [
+                [b("btn.become_driver")],
+                [b("btn.find_driver"), b("btn.my_record")],
+                [b("btn.leave_carpool")],
+            ]
+        else:
+            keyboard = [
+                [b("btn.become_driver"), b("btn.add_passengers")],
+                [b("btn.my_record"), b("btn.remove_passenger")],
+                [b("btn.find_driver"), b("btn.leave_carpool")],
+                [b("btn.stop_being_driver")],
+            ]
+
         if user_id is not None and user_id in self.config.ADMIN_USER_IDS:
-            keyboard.append([button("btn.admin_weekly_target", user_id)])
+            keyboard.append([b("btn.admin_weekly_target")])
 
-        keyboard.append([button("btn.cancel", user_id)])
+        keyboard.append([b("btn.help")])
 
-        return ReplyKeyboardMarkup(
-            keyboard,
-            resize_keyboard=True,
-        )
+        return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
     def kb_yes_no(self, user_id: int | None = None):
         return ReplyKeyboardMarkup(
@@ -201,11 +258,22 @@ class BotHandlers:
     # ======================================================
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        uid = update.effective_user.id
+        # Один запрос на осознанное действие пользователя — приемлемо, зато
+        # дальше меню и подсказки сразу под его роль.
+        try:
+            is_driver = await asyncio.to_thread(self.remember_role_and_check, uid)
+        except Exception:
+            is_driver = None
+
+        role_hint = t(
+            "start.role_driver" if is_driver else "start.role_passenger", tg_id=uid
+        ) if is_driver is not None else ""
+
         await self._reply(
             update,
-            "Привет! Я помогу вести список водителей и пассажиров.\n\n"
-            "Выбери действие кнопками ниже:",
-            reply_markup=self.kb_main(update.effective_user.id),
+            t("start.greeting", tg_id=uid, role_hint=role_hint),
+            reply_markup=self.kb_main(uid, is_driver),
         )
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -348,6 +416,7 @@ class BotHandlers:
     async def my_record(self, update, context):
         tg_id = update.effective_user.id
         driver = self.sheets.get_driver(tg_id)
+        self.remember_role(tg_id, driver is not None)
 
         if not driver:
             await self._reply(
@@ -396,7 +465,7 @@ class BotHandlers:
 
     async def stop_being_driver_start(self, update, context):
         tg_id = update.effective_user.id
-        if not self.sheets.get_driver(tg_id):
+        if not self.remember_role_and_check(tg_id):
             await self._reply(
                 update,
                 "У тебя нет записи водителя.",
@@ -489,7 +558,7 @@ class BotHandlers:
 
     async def add_passengers_start(self, update, context):
         tg_id = update.effective_user.id
-        if not self.sheets.get_driver(tg_id):
+        if not self.remember_role_and_check(tg_id):
             await self._reply(
                 update,
                 "Сначала нужно стать водителем.\n"
@@ -553,6 +622,7 @@ class BotHandlers:
             return ConversationHandler.END
 
         driver = self.sheets.get_driver(tg_id)
+        self.remember_role(tg_id, driver is not None)
 
         # MERGE: сохраняем существующих пассажиров + добавляем новых
         existing_dp = self.sheets.get_driver_passengers(tg_id)
@@ -958,7 +1028,7 @@ class BotHandlers:
 
         tg_id = int(raw)
 
-        if not self.sheets.get_driver(tg_id):
+        if not self.remember_role_and_check(tg_id):
             await self._reply(
                 update,
                 t("admin.weekly_driver_not_found", tg_id=uid, driver_id=tg_id),
@@ -1519,3 +1589,124 @@ class BotHandlers:
                     chat_id=self.config.ADMIN_CHAT_ID,
                     text=f"🗄 ❌ Снапшот НЕ записан: {str(e)[:500]}",
                 )
+
+    # ======================================================
+    # Помощь и роль
+    # ======================================================
+
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Инструкция под роль. /help или кнопка «❓ Помощь»."""
+        uid = update.effective_user.id
+        is_driver = self.known_role(uid)
+        if is_driver is None:
+            try:
+                is_driver = self.sheets.get_driver(uid) is not None
+                self.remember_role(uid, is_driver)
+            except Exception:
+                is_driver = False
+
+        body = t("help.driver" if is_driver else "help.passenger", tg_id=uid)
+        text = "\n\n".join([
+            t("help.header", tg_id=uid),
+            body,
+            t("help.footer", tg_id=uid),
+        ])
+        await self._reply(update, text, reply_markup=self.kb_main(uid, is_driver))
+
+    # ======================================================
+    # Пассажир открепляется сам
+    #
+    # Раньше «пассажир уже записан к другому водителю» был тупиком: снять
+    # человека мог только администратор вручную. Теперь пассажир делает это
+    # сам, а водитель получает уведомление — ошибка видна сразу и
+    # исправляется кнопкой «Добавить пассажиров».
+    # ======================================================
+
+    async def leave_carpool_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        uid = update.effective_user.id
+        await self._reply(update, t("leave.ask_name", tg_id=uid))
+        return ST_LEAVE_NAME
+
+    async def leave_carpool_name(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        uid = update.effective_user.id
+        raw = (update.effective_message.text or "").strip()
+
+        emp = await asyncio.to_thread(self.sheets.get_employee_by_name, raw)
+        if emp is None or not emp.name:
+            await self._reply(update, t("leave.not_employee", tg_id=uid),
+                              reply_markup=self.kb_main(uid))
+            return ConversationHandler.END
+
+        found = await asyncio.to_thread(self.sheets.find_driver_for_passenger, emp.name)
+        if not found:
+            await self._reply(update, t("leave.not_in_carpool", tg_id=uid),
+                              reply_markup=self.kb_main(uid))
+            return ConversationHandler.END
+
+        driver_tgid, driver_name = found
+        context.user_data["leave_name"] = emp.name
+        context.user_data["leave_driver_tgid"] = driver_tgid
+        context.user_data["leave_driver_name"] = driver_name
+
+        await self._reply(
+            update,
+            t("leave.confirm", tg_id=uid, driver=driver_name),
+            reply_markup=self.kb_yes_no(uid),
+        )
+        return ST_LEAVE_CONFIRM
+
+    async def leave_carpool_confirm(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        uid = update.effective_user.id
+        name = context.user_data.get("leave_name")
+        driver_tgid = context.user_data.get("leave_driver_tgid")
+        driver_name = context.user_data.get("leave_driver_name", "")
+        if not name:
+            await self._reply(update, t("leave.error", tg_id=uid), reply_markup=self.kb_main(uid))
+            return ConversationHandler.END
+
+        intent = parse_yes_no_intent(update.effective_message.text or "")
+        if intent == "unclear":
+            await self._reply(
+                update,
+                t("leave.confirm", tg_id=uid, driver=driver_name),
+                reply_markup=self.kb_yes_no(uid),
+            )
+            return ST_LEAVE_CONFIRM
+        if intent == "no":
+            context.user_data.clear()
+            await self._reply(update, t("leave.cancelled", tg_id=uid, driver=driver_name),
+                              reply_markup=self.kb_main(uid))
+            return ConversationHandler.END
+
+        try:
+            # except_tgid=0 — исключать некого, снимаем у текущего водителя.
+            await asyncio.to_thread(
+                self.sheets.unlink_passenger_everywhere, name, except_tgid=0
+            )
+        except Exception as e:
+            logger.exception("leave_carpool failed")
+            await self._reply(update, t("leave.error", tg_id=uid),
+                              reply_markup=self.kb_main(uid))
+            await self.log_admin(context, "Leave carpool FAILED",
+                                 f"{name} -> {driver_name}: {e}", update)
+            return ConversationHandler.END
+
+        await self._reply(update, t("leave.done", tg_id=uid, driver=driver_name),
+                          reply_markup=self.kb_main(uid))
+
+        # Водитель должен узнать сразу: его карпул мог упасть ниже двух
+        # человек, а это потеря дня в доплатах.
+        if driver_tgid:
+            try:
+                await context.bot.send_message(
+                    chat_id=driver_tgid,
+                    text=t("leave.driver_notice", tg_id=driver_tgid,
+                           passenger=name, button=button("btn.add_passengers", driver_tgid)),
+                )
+            except Exception:
+                logger.info("не удалось уведомить водителя %s", driver_tgid)
+
+        await self.log_admin(context, "Passenger left carpool",
+                             f"{name} открепился от {driver_name} (tg_id={driver_tgid})", update)
+        context.user_data.clear()
+        return ConversationHandler.END
