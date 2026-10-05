@@ -1,7 +1,7 @@
 /************ CONFIG ************/
 const CONFIG = {
   // ✅ Ссылка на таблицу (вставь свою)
-  spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/15H9rCrqNI6Ws3SsSBalUp6x_gYKPxKkqL4tqjTmv7G8/edit',
+  spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/10WhTZeiWgSdjmjsFvP3O3TX_ocQxDXkzPfWSncKU-yE/edit',
   // Листы
   sourceSheet: 'drivers_passengers',
   week1: 'week1',
@@ -36,11 +36,35 @@ const CONFIG = {
   // ✅ Columbus — отдельная площадка, отдельная сводка
   svodkaColumbusSheet: 'Svodka Columbus',
   anomaliesColumbusSheet: '_anomalies_columbus',
+  // ✅ Buffalo — отдельная площадка, отдельная сводка
+  svodkaBuffaloSheet: 'Svodka Buffalo',
+  anomaliesBuffaloSheet: '_anomalies_buffalo',
 };
+
+
+/**
+ * Таблица, с которой работает скрипт.
+ *
+ * Всегда предпочитаем ПРИВЯЗАННУЮ таблицу (скрипт живёт внутри неё). Раньше
+ * везде стоял openByUrl(CONFIG.spreadsheetUrl), и когда в CONFIG оставался URL
+ * другой таблицы, отчёт молча читал и писал ЧУЖУЮ таблицу — в своей не
+ * появлялось ничего. openByUrl остаётся только как запасной путь для запуска
+ * standalone-скриптом.
+ */
+function getSpreadsheet_() {
+  var active = null;
+  try {
+    active = SpreadsheetApp.getActiveSpreadsheet();
+  } catch (e) {
+    active = null;
+  }
+  if (active) return active;
+  return SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+}
 
 /************ MAIN 1: Daily append to week1 ************/
 function appendDriversPassengersToWeek1() {
-  const ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  const ss = getSpreadsheet_();
   const tz = ss.getSpreadsheetTimeZone();
   const src = mustGetSheet_(ss, CONFIG.sourceSheet);
   const w1 = mustGetSheet_(ss, CONFIG.week1);
@@ -73,7 +97,7 @@ function appendDriversPassengersToWeek1() {
 
 /************ MAIN 2: Weekly rotation (Sunday) ************/
 function rotateWeeksOnSunday() {
-  const ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  const ss = getSpreadsheet_();
   const w1 = mustGetSheet_(ss, CONFIG.week1);
   const w2 = mustGetSheet_(ss, CONFIG.week2);
   const w3 = mustGetSheet_(ss, CONFIG.week3);
@@ -86,7 +110,7 @@ function rotateWeeksOnSunday() {
 
 /************ OPTIONAL: One-time helper to create missing week sheets ************/
 function ensureWeekSheetsExist() {
-  const ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  const ss = getSpreadsheet_();
   [CONFIG.week1, CONFIG.week2, CONFIG.week3, CONFIG.week4].forEach(name => {
     if (!ss.getSheetByName(name)) ss.insertSheet(name);
   });
@@ -205,7 +229,7 @@ function pickHeaderIndex_(h, variants) {
 }
 
 function buildPassengerToDriverMap_() {
-  const ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  const ss = getSpreadsheet_();
   const dp = mustGetSheet_(ss, CONFIG.sourceSheet);
   const lastRow = dp.getLastRow();
   const lastCol = dp.getLastColumn();
@@ -273,7 +297,7 @@ function chunkContiguous_(sortedRows) {
 }
 
 function syncEmployeesRows_(rowNumbers) {
-  const ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  const ss = getSpreadsheet_();
   const emp = mustGetSheet_(ss, CONFIG.employeesSheet);
   const lastRow = emp.getLastRow();
   if (lastRow < 2) return;
@@ -307,7 +331,7 @@ function syncEmployeesRows_(rowNumbers) {
 }
 
 function syncEmployeesAll() {
-  const ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  const ss = getSpreadsheet_();
   const emp = mustGetSheet_(ss, CONFIG.employeesSheet);
   const lastRow = emp.getLastRow();
   if (lastRow < 2) return;
@@ -324,7 +348,7 @@ function syncEmployeesAll() {
 function removePassengerOnlyFromDriversPassengers_(employeeName) {
   const target = normName_(employeeName);
   if (!target) return;
-  const ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  const ss = getSpreadsheet_();
   const dp = mustGetSheet_(ss, CONFIG.sourceSheet);
   const lastRow = dp.getLastRow();
   const lastCol = dp.getLastColumn();
@@ -353,7 +377,7 @@ function removePassengerOnlyFromDriversPassengers_(employeeName) {
 function removeEmployeeFromDriversPassengers_(employeeName) {
   const target = normName_(employeeName);
   if (!target) return;
-  const ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  const ss = getSpreadsheet_();
   const dp = mustGetSheet_(ss, CONFIG.sourceSheet);
   const lastRow = dp.getLastRow();
   const lastCol = dp.getLastColumn();
@@ -387,7 +411,7 @@ function removeEmployeeFromDriversPassengers_(employeeName) {
 }
 
 function clearEmployeesDE_(row) {
-  const ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  const ss = getSpreadsheet_();
   const emp = mustGetSheet_(ss, CONFIG.employeesSheet);
   const { cRides, cTgid } = getEmployeesHeaderIndex_(emp);
   emp.getRange(row, cRides + 1).clearContent();
@@ -399,7 +423,7 @@ function clearEmployeesDE_(row) {
  */
 function clearEmployeesDEByNames_(names) {
   if (!names || !names.length) return;
-  const ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  const ss = getSpreadsheet_();
   const emp = mustGetSheet_(ss, CONFIG.employeesSheet);
   const lastRow = emp.getLastRow();
   if (lastRow < 2) return;
@@ -513,7 +537,7 @@ function processPendingShiftChanges_() {
  * Выполнить отложенную задачу со свежей проверкой состояния и сравнением со snapshot'ом.
  */
 function executeDelayedShiftChange_(entry) {
-  var ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  var ss = getSpreadsheet_();
   var emp = mustGetSheet_(ss, CONFIG.employeesSheet);
   var headerInfo = getEmployeesHeaderIndex_(emp);
   var cEmpName = headerInfo.cEmpName;
@@ -652,7 +676,7 @@ function performShiftChangeWithLogging_(row, oldShift, newShift, actionLog) {
   var newNorm = normalizeShift_(newShift);
   if (oldNorm === newNorm) return;
 
-  var ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  var ss = getSpreadsheet_();
   var emp = mustGetSheet_(ss, CONFIG.employeesSheet);
   var empLastRow = emp.getLastRow();
   var headerInfo = getEmployeesHeaderIndex_(emp);
@@ -802,7 +826,7 @@ function saveShiftSnapshot_(snap) {
 }
 
 function refreshShiftSnapshotAndCleanup_() {
-  const ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  const ss = getSpreadsheet_();
   const emp = mustGetSheet_(ss, CONFIG.employeesSheet);
   const lastRow = emp.getLastRow();
   if (lastRow < 2) return;
@@ -834,7 +858,7 @@ function onEmployeesEdit(e) {
     if (sheet.getName() !== CONFIG.employeesSheet) return;
     const row = range.getRow();
     if (row < 2) return;
-    const ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+    const ss = getSpreadsheet_();
     const emp = mustGetSheet_(ss, CONFIG.employeesSheet);
     const { cEmpName, cShift, cRides, cTgid } = getEmployeesHeaderIndex_(emp);
     if (range.getColumn() === (cShift + 1)) {
@@ -898,7 +922,7 @@ function createEmployeesEditTrigger() {
     return;
   }
   ScriptApp.newTrigger(functionName)
-    .forSpreadsheet(SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl))
+    .forSpreadsheet(getSpreadsheet_())
     .onEdit()
     .create();
   Logger.log('Employees onEdit trigger создан.');
@@ -958,7 +982,7 @@ function findHeaderCol_(sheet, headerText) {
  * Может быть запущена вручную через Run → fixFormulas (alias) или Run → syncShiftsManual.
  */
 function syncShiftsToDpAndDrivers_() {
-  const ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  const ss = getSpreadsheet_();
   const emp = mustGetSheet_(ss, CONFIG.employeesSheet);
   const empLastRow = emp.getLastRow();
   if (empLastRow < 2) return;
@@ -1071,7 +1095,7 @@ function createFormulaGuardTrigger() {
  * syncEmployeesAll будет поддерживать Shift в актуальном состоянии.
  */
 function migrateShiftsToPlainText() {
-  const ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  const ss = getSpreadsheet_();
   ['drivers', 'drivers_passengers'].forEach(function(name) {
     const sh = ss.getSheetByName(name);
     if (!sh) { Logger.log('migrate: лист %s не найден', name); return; }
@@ -1240,6 +1264,53 @@ function lookupPresence_(name, presenceMap, resolver, dateStr) {
 }
 
 /**
+ * Как lookupPresence_, но возвращает СИЛУ совпадения вместо булева:
+ *   3 — точное имя, 2 — переставленные/частичные токены, 1 — нечёткое (опечатка), 0 — нет.
+ *
+ * Нужно, когда площадок несколько: точное совпадение в одном табеле обязано
+ * побеждать нечёткое в другом. Иначе похожие фамилии молча уводят водителя в
+ * чужую сводку — реальный случай: Mangidov vs Mangutov дают dice 0.824 при
+ * пороге 0.82, и Mangidov попадал в Buffalo, где его в табеле нет.
+ */
+function lookupPresenceStrength_(name, presenceMap, resolver, dateStr) {
+  var norm = normName_(name);
+
+  // 1. Точное
+  if (presenceMap[norm] && presenceMap[norm][dateStr]) return 3;
+
+  // 2. Переставленные токены
+  var tokens = norm.split(/\s+/);
+  var sorted = tokens.slice().sort().join(' ');
+  var resolved = resolver[sorted];
+  if (resolved && presenceMap[resolved] && presenceMap[resolved][dateStr]) return 2;
+
+  // 3. Подмножество: убираем по одному токену
+  if (tokens.length >= 3) {
+    for (var j = 0; j < tokens.length; j++) {
+      var subset = [];
+      for (var k = 0; k < tokens.length; k++) {
+        if (k !== j) subset.push(tokens[k]);
+      }
+      var subKey = subset.sort().join(' ');
+      resolved = resolver[subKey];
+      if (resolved && presenceMap[resolved] && presenceMap[resolved][dateStr]) return 2;
+    }
+  }
+
+  // 4. Нечёткое (опечатки)
+  var keys = Object.keys(presenceMap);
+  var bestScore = 0;
+  for (var i = 0; i < keys.length; i++) {
+    if (!presenceMap[keys[i]][dateStr]) continue;
+    var score = diceSimilarity_(sorted, keys[i].split(/\s+/).sort().join(' '));
+    if (score > bestScore) bestScore = score;
+  }
+  if (bestScore >= 0.82) return 1;
+
+  return 0;
+}
+
+/**
  * Find timesheet sheets by suffix (AMAZON/MELTECH) and verify date overlap
  * using actual dates from the sheet's header row 1 (columns C-I).
  *
@@ -1273,7 +1344,7 @@ function findTimesheetSheets_(ss, weekStartStr, weekEndStr, tz) {
 
     // Check suffix: accepts variations of AMAZON and MELTECH (incl. typos like "MELTEH")
     // Works with prefixes like "PHASE 5 ..." because regex anchors to the end with \b.
-    var locMatch = name.match(/\b(AMAZON|AMZN|MELTECH|MELTEH|MILTECH|MLT|COLUMBUS|CLMB|CBUS)\s*$/i);
+    var locMatch = name.match(/\b(AMAZON|AMZN|MELTECH|MELTEH|MILTECH|MLT|COLUMBUS|CLMB|CBUS|BUFFALO|BUFF|BUF|BFLO)\s*$/i);
     if (!locMatch) return;
 
     // Normalize location to canonical form
@@ -1281,6 +1352,7 @@ function findTimesheetSheets_(ss, weekStartStr, weekEndStr, tz) {
     if (location === 'MELTEH' || location === 'MILTECH' || location === 'MLT') location = 'MELTECH';
     if (location === 'AMZN') location = 'AMAZON';
     if (location === 'CLMB' || location === 'CBUS') location = 'COLUMBUS';
+    if (location === 'BUFF' || location === 'BUF' || location === 'BFLO') location = 'BUFFALO';
 
     // Skip known non-timesheet sheets
     var lower = name.toLowerCase();
@@ -1450,22 +1522,29 @@ function getManualAdjustments_(ss, startDateStr, endDateStr) {
   return result;
 }
 
-function calculateCreditsSplit_(snapshots, mainPres, colPres, adjustments, weekLabel) {
-  // Правило зачёта (обе площадки): день водителю, если он ОТМЕТИЛСЯ в табеле
+function calculateCreditsSplit_(snapshots, mainPres, colPres, bufPres, adjustments, weekLabel) {
+  // Правило зачёта (все площадки): день водителю, если он ОТМЕТИЛСЯ в табеле
   // в этот день И у него в боте на этот день записано >= 2 пассажира.
   // Присутствие пассажиров в табеле НЕ проверяется.
   //
-  // Привязка дня к площадке: день, где водитель есть в COLUMBUS-табеле, идёт
-  // в Columbus-сводку (Columbus побеждает при пересечении); иначе — в основную
-  // (Amazon/Meltech). Воскресный авто-зачёт (нет табелей) → в основную.
-  var mainCredits = {}, colCredits = {};
-  var mainAnoms = [], colAnoms = [];
+  // Привязка дня к площадке (приоритет при пересечении): COLUMBUS → BUFFALO →
+  // основная (Amazon/Meltech). Т.е. день, где водитель есть в Columbus-табеле,
+  // идёт в Columbus-сводку; иначе если есть в Buffalo-табеле — в Buffalo-сводку;
+  // иначе — в основную. Воскресный авто-зачёт (нет табелей) → в основную.
+  var mainCredits = {}, colCredits = {}, bufCredits = {};
+  var mainAnoms = [], colAnoms = [], bufAnoms = [];
   var dates = Object.keys(snapshots).sort();
-  if (!dates.length) return { mainCredits: mainCredits, colCredits: colCredits, mainAnoms: mainAnoms, colAnoms: colAnoms };
+  if (!dates.length) {
+    return {
+      mainCredits: mainCredits, colCredits: colCredits, bufCredits: bufCredits,
+      mainAnoms: mainAnoms, colAnoms: colAnoms, bufAnoms: bufAnoms,
+    };
+  }
 
   var passengerHistory = {};
   var mainResolver = buildPresenceResolver_(mainPres);
   var colResolver  = buildPresenceResolver_(colPres);
+  var bufResolver  = buildPresenceResolver_(bufPres);
 
   // Воскресное исключение — только для основной площадки: если в вс нет
   // ни одной отметки в основных табелях, старый авто-зачёт (водитель = present).
@@ -1490,10 +1569,16 @@ function calculateCreditsSplit_(snapshots, mainPres, colPres, adjustments, weekL
       if (adjustments[adjKey]) entry = adjustments[adjKey];
 
       var has2 = entry.passengers.length >= 2;
-      var inCol  = lookupPresence_(entry.driver, colPres, colResolver, dateStr);
-      var inMain = lookupPresence_(entry.driver, mainPres, mainResolver, dateStr);
 
-      if (inCol) {
+      // Сила совпадения по каждой площадке, а не просто «есть/нет»: точное
+      // совпадение в одном табеле должно побеждать нечёткое в другом.
+      // При равной силе приоритет прежний: COLUMBUS → BUFFALO → основная.
+      var sCol  = lookupPresenceStrength_(entry.driver, colPres, colResolver, dateStr);
+      var sBuf  = lookupPresenceStrength_(entry.driver, bufPres, bufResolver, dateStr);
+      var sMain = lookupPresenceStrength_(entry.driver, mainPres, mainResolver, dateStr);
+      var best  = Math.max(sCol, sBuf, sMain);
+
+      if (best > 0 && sCol === best) {
         // Columbus-день
         if (has2) {
           ensure(colCredits, normDriver, entry.driver);
@@ -1504,7 +1589,18 @@ function calculateCreditsSplit_(snapshots, mainPres, colPres, adjustments, weekL
             details: 'В Columbus-табеле, но карпула >= 2 нет', week: weekLabel,
           });
         }
-      } else if (inMain || mainSundayExempt) {
+      } else if (best > 0 && sBuf === best) {
+        // Buffalo-день
+        if (has2) {
+          ensure(bufCredits, normDriver, entry.driver);
+          bufCredits[normDriver].days++;
+        } else {
+          bufAnoms.push({
+            date: dateStr, type: 'BUFFALO_NO_CARPOOL', driver: entry.driver,
+            details: 'В Buffalo-табеле, но карпула >= 2 нет', week: weekLabel,
+          });
+        }
+      } else if (best > 0 || mainSundayExempt) {
         // Основной день (Amazon/Meltech)
         if (has2) {
           ensure(mainCredits, normDriver, entry.driver);
@@ -1535,7 +1631,10 @@ function calculateCreditsSplit_(snapshots, mainPres, colPres, adjustments, weekL
     });
   });
 
-  return { mainCredits: mainCredits, colCredits: colCredits, mainAnoms: mainAnoms, colAnoms: colAnoms };
+  return {
+    mainCredits: mainCredits, colCredits: colCredits, bufCredits: bufCredits,
+    mainAnoms: mainAnoms, colAnoms: colAnoms, bufAnoms: bufAnoms,
+  };
 }
 
 // Superseded by calculateCreditsSplit_ (оставлено для истории; не вызывается).
@@ -1772,7 +1871,7 @@ function writeAnomalies_(ss, anomalies, sheetName) {
 /************ MAIN 3: Bi-weekly report ************/
 
 function generateBiWeeklyReport() {
-  var ss = SpreadsheetApp.openByUrl(CONFIG.spreadsheetUrl);
+  var ss = getSpreadsheet_();
   var tz = ss.getSpreadsheetTimeZone();
 
   var w3 = mustGetSheet_(ss, CONFIG.week3);
@@ -1815,24 +1914,28 @@ function generateBiWeeklyReport() {
   }
 
   function isColumbus_(info) { return info.location === 'COLUMBUS'; }
+  function isBuffalo_(info) { return info.location === 'BUFFALO'; }
   function isMainLoc_(info) { return info.location === 'AMAZON' || info.location === 'MELTECH'; }
 
-  // Раздельные пулы присутствия: основной (Amazon+Meltech) и Columbus.
+  // Раздельные пулы присутствия: основной (Amazon+Meltech), Columbus и Buffalo.
   var mainPresA = buildPresenceMap_(tsA.filter(isMainLoc_), tz);
   var colPresA  = buildPresenceMap_(tsA.filter(isColumbus_), tz);
+  var bufPresA  = buildPresenceMap_(tsA.filter(isBuffalo_), tz);
   var mainPresB = buildPresenceMap_(tsB.filter(isMainLoc_), tz);
   var colPresB  = buildPresenceMap_(tsB.filter(isColumbus_), tz);
+  var bufPresB  = buildPresenceMap_(tsB.filter(isBuffalo_), tz);
 
-  Logger.log('generateBiWeeklyReport: main A=%d/B=%d, columbus A=%d/B=%d people',
+  Logger.log('generateBiWeeklyReport: main A=%d/B=%d, columbus A=%d/B=%d, buffalo A=%d/B=%d people',
     Object.keys(mainPresA).length, Object.keys(mainPresB).length,
-    Object.keys(colPresA).length, Object.keys(colPresB).length);
+    Object.keys(colPresA).length, Object.keys(colPresB).length,
+    Object.keys(bufPresA).length, Object.keys(bufPresB).length);
 
   var globalStart = startA || startB;
   var globalEnd = endB || endA;
   var adjustments = getManualAdjustments_(ss, globalStart, globalEnd);
 
-  var splitA = calculateCreditsSplit_(snapshotsA, mainPresA, colPresA, adjustments, labelA);
-  var splitB = calculateCreditsSplit_(snapshotsB, mainPresB, colPresB, adjustments, labelB);
+  var splitA = calculateCreditsSplit_(snapshotsA, mainPresA, colPresA, bufPresA, adjustments, labelA);
+  var splitB = calculateCreditsSplit_(snapshotsB, mainPresB, colPresB, bufPresB, adjustments, labelB);
 
   // Основная сводка (Amazon/Meltech) + аномалии.
   // Записи обёрнуты в retry: таблицу параллельно трогают другие триггеры,
@@ -1855,8 +1958,18 @@ function generateBiWeeklyReport() {
     writeAnomalies_(ss, splitA.colAnoms.concat(splitB.colAnoms), CONFIG.anomaliesColumbusSheet);
   });
 
-  Logger.log('generateBiWeeklyReport: done. main anomalies=%d, columbus anomalies=%d',
+  // Buffalo — отдельная сводка + отдельные аномалии
+  withSpreadsheetRetry_('svodka buffalo', function() {
+    writeSvodka_(ss, splitA.bufCredits, splitB.bufCredits, labelA, labelB,
+                 splitA.bufAnoms, splitB.bufAnoms, CONFIG.svodkaBuffaloSheet);
+  });
+  withSpreadsheetRetry_('anomalies buffalo', function() {
+    writeAnomalies_(ss, splitA.bufAnoms.concat(splitB.bufAnoms), CONFIG.anomaliesBuffaloSheet);
+  });
+
+  Logger.log('generateBiWeeklyReport: done. main anomalies=%d, columbus anomalies=%d, buffalo anomalies=%d',
     splitA.mainAnoms.length + splitB.mainAnoms.length,
-    splitA.colAnoms.length + splitB.colAnoms.length);
+    splitA.colAnoms.length + splitB.colAnoms.length,
+    splitA.bufAnoms.length + splitB.bufAnoms.length);
 }
 
