@@ -19,6 +19,7 @@ from telegram.ext import (
 from telegram.ext.filters import MessageFilter
 
 from config import Config
+from db.capture import CAPTURE_TZ
 from i18n import all_translations, button_regex
 from intent import parse_yes_no_intent
 from persistence import get_state_manager
@@ -284,6 +285,9 @@ def build_app():
 
     app.add_handler(CommandHandler("broadcast_keyboard", handlers.broadcast_keyboard))
     app.add_handler(CommandHandler("report", handlers.report_command))
+    app.add_handler(CommandHandler("db_status", handlers.db_status_command))
+    app.add_handler(CommandHandler("db_capture", handlers.db_capture_command))
+    app.add_handler(CommandHandler("db_backfill", handlers.db_backfill_command))
     app.add_handler(CommandHandler("english", handlers.set_language_english))
     app.add_handler(CommandHandler("russian", handlers.set_language_russian))
 
@@ -301,6 +305,23 @@ def build_app():
         first=60,
         name="expire_unanswered_weekly_checks",
     )
+
+    # Параллельный захват снапшотов в Postgres.
+    #
+    # Схему накатываем на старте: Postgres на Railway виден только изнутри
+    # приватной сети, снаружи миграцию не применить. Схема идемпотентна.
+    # Время совпадает со снапшотом GAS, чтобы данные были сопоставимы.
+    from db import store
+
+    if store.apply_schema():
+        import datetime as _dt
+
+        app.job_queue.run_daily(
+            handlers.db_capture_job,
+            time=_dt.time(hour=21, minute=5, tzinfo=CAPTURE_TZ),
+            name="daily_carpool_snapshot",
+        )
+        logger.info("Ежедневный захват снапшотов включён (21:05 %s)", CAPTURE_TZ)
 
     return app
 

@@ -1341,3 +1341,157 @@ class BotHandlers:
                 reply_markup=self.kb_main(tg_id) if i + 4000 >= len(text) else None,
             )
         return ConversationHandler.END
+
+    # ======================================================
+    # Захват снапшотов в Postgres (admin only)
+    #
+    # Работает параллельно с GAS и ничего в Sheets не меняет. Команды нужны
+    # потому, что Postgres на Railway доступен только изнутри приватной сети:
+    # запустить backfill с ноутбука нельзя, а из бота — можно.
+    # ======================================================
+
+    async def db_status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Состояние захвата. /db_status"""
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+
+        from db import store
+
+        try:
+            info = await asyncio.to_thread(store.status)
+        except Exception as e:
+            await self._reply(update, f"❌ Ошибка БД: {e}", reply_markup=self.kb_main(uid))
+            return
+
+        if not info.get("enabled"):
+            await self._reply(
+                update,
+                "⚪️ Захват выключен: переменная DATABASE_URL не задана.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        lines = [
+            "🗄 Захват снапшотов",
+            "",
+            f"Строк: {info['rows']}",
+            f"Водителей: {info['drivers']}",
+            f"Дней истории: {info['days']}",
+            f"Период: {info['first']} — {info['last']}",
+        ]
+        if info["runs"]:
+            lines.append("\nПоследние прогоны:")
+            for source, started, written, updated, skipped, error in info["runs"]:
+                stamp = started.strftime("%m-%d %H:%M")
+                if error:
+                    lines.append(f"• {stamp} {source} — ОШИБКА: {error[:80]}")
+                else:
+                    lines.append(
+                        f"• {stamp} {source} — записано {written}, "
+                        f"обновлено {updated}, пропущено {skipped}"
+                    )
+        await self._reply(update, "\n".join(lines), reply_markup=self.kb_main(uid))
+
+    async def db_capture_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Снять снимок текущих карпулов вручную. /db_capture"""
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+        await self._run_capture(
+            update, uid,
+            lambda: __import__("db.store", fromlist=["store"]).capture_live(
+                self.sheets, self.config.DRIVERS_PASSENGERS_SHEET
+            ),
+            "снимок на сегодня",
+        )
+
+    async def db_backfill_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Перенести историю из week-листа. /db_backfill week2"""
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+
+        args = context.args or []
+        if not args:
+            await self._reply(
+                update,
+                "Укажи лист: /db_backfill week2\n"
+                "Доступны week1, week2, week3, week4.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        sheet = args[0].strip()
+        if sheet not in {"week1", "week2", "week3", "week4"}:
+            await self._reply(
+                update, f"Неизвестный лист «{sheet}».", reply_markup=self.kb_main(uid)
+            )
+            return
+
+        await self._run_capture(
+            update, uid,
+            lambda: __import__("db.store", fromlist=["store"]).backfill(self.sheets, sheet),
+            f"перенос {sheet}",
+        )
+
+    async def _run_capture(self, update, uid, work, label: str):
+        """Общая обвязка для команд захвата: прогресс, запуск, отчёт."""
+        await self._reply(update, f"⏳ {label}…")
+        try:
+            info = await asyncio.to_thread(work)
+        except Exception as e:
+            logger.exception("capture failed")
+            await self._reply(update, f"❌ Ошибка: {e}", reply_markup=self.kb_main(uid))
+            return
+
+        if not info.get("enabled"):
+            await self._reply(
+                update,
+                "⚪️ Захват выключен: переменная DATABASE_URL не задана.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        lines = [
+            f"✅ {label} — готово",
+            "",
+            f"Прочитано строк: {info['read']}",
+            f"Записано новых: {info['inserted']}",
+            f"Обновлено: {info['updated']}",
+        ]
+        if info["collapsed"]:
+            lines.append(f"Схлопнуто дублей: {info['collapsed']}")
+        if info["skipped"]:
+            lines.append(f"Пропущено: {info['skipped']}")
+            for reason, count in sorted(info["reasons"].items()):
+                lines.append(f"  • {reason}: {count}")
+        await self._reply(update, "\n".join(lines), reply_markup=self.kb_main(uid))
+
+    async def db_capture_job(self, context: ContextTypes.DEFAULT_TYPE):
+        """Ежедневный захват по расписанию. Параллелен снапшоту GAS."""
+        from db import store
+
+        if not store.enabled():
+            return
+        try:
+            info = await asyncio.to_thread(
+                store.capture_live, self.sheets, self.config.DRIVERS_PASSENGERS_SHEET
+            )
+            logger.info("daily capture: %s", info)
+            if self.config.ADMIN_CHAT_ID:
+                await context.bot.send_message(
+                    chat_id=self.config.ADMIN_CHAT_ID,
+                    text=(
+                        f"🗄 Снапшот записан\n"
+                        f"Прочитано {info['read']}, новых {info['inserted']}, "
+                        f"обновлено {info['updated']}, пропущено {info['skipped']}"
+                    ),
+                )
+        except Exception as e:
+            logger.exception("daily capture failed")
+            if self.config.ADMIN_CHAT_ID:
+                await context.bot.send_message(
+                    chat_id=self.config.ADMIN_CHAT_ID,
+                    text=f"🗄 ❌ Снапшот НЕ записан: {str(e)[:500]}",
+                )
