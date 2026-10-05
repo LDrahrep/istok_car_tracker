@@ -346,4 +346,8 @@ def build_app():
 
 if __name__ == "__main__":
     application = build_app()
-    application.run_polling(drop_pending_updates=True, allowed_updates=None)
+    # drop_pending_updates=False: всё, что люди прислали, пока сервис
+    # перезапускался, должно быть обработано, а не выброшено. Раньше стояло
+    # True, и каждый деплой молча съедал сообщения — человек отправлял список
+    # пассажиров, не получал ответа и считал, что сохранилось.
+    application.run_polling(drop_pending_updates=False, allowed_updates=None)

@@ -178,3 +178,25 @@ def test_card_without_seat_data_omits_seats():
     card = _card(taken=None)
     assert "свободно" not in card and "мест нет" not in card
     assert "Toyota RAV4" in card
+
+
+def test_no_duplicate_keys_in_locales():
+    """Дубль ключа молча отбрасывает одну из записей.
+
+    Реальный случай: 'start.greeting' был объявлен дважды, побеждала вторая
+    короткая запись — длинное приветствие с подсказкой по роли не доходило
+    до пользователя вообще, а переданный role_hint тихо игнорировался.
+    Словарь Python такое не сигнализирует, поэтому проверяем исходник.
+    """
+    import ast
+    import collections
+
+    for name in ("locales/ru.py", "locales/en.py"):
+        tree = ast.parse((ROOT / name).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            keys = [k.value for k in node.keys if isinstance(k, ast.Constant)]
+            dupes = [k for k, c in collections.Counter(keys).items() if c > 1]
+            assert not dupes, f"{name}: ключ объявлен дважды: {dupes}"
+            break

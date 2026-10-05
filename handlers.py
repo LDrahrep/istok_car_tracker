@@ -241,7 +241,7 @@ class BotHandlers:
         if update.effective_message:
             await self._reply(
                 update,
-                "Я не понял сообщение 🤔\nИспользуй кнопки на клавиатуре или команду /start",
+                t("unknown.message", tg_id=u.id),
                 reply_markup=self.kb_main(u.id),
             )
 
@@ -284,7 +284,7 @@ class BotHandlers:
         context.user_data.clear()
         await self._reply(
             update,
-            "Ок, отменил 👍",
+            t("cancel.done", tg_id=update.effective_user.id),
             reply_markup=self.kb_main(update.effective_user.id),
         )
         return ConversationHandler.END
@@ -296,8 +296,7 @@ class BotHandlers:
     async def become_driver_start(self, update, context):
         await self._reply(
             update,
-            "Напиши имя и фамилию.\n"
-            "Пример: Ivan Ivanov",
+            t("driver.enter_name", tg_id=update.effective_user.id),
         )
         return ST_DRIVER_NAME
 
@@ -316,13 +315,13 @@ class BotHandlers:
                 "become_driver_name: NOT FOUND %r, all_names=%d, suggestions=%r",
                 name, len(all_names), suggestions,
             )
-            msg = "Сотрудник не найден 😕\n"
             if suggestions:
-                msg += "Возможно, ты имел в виду:\n"
-                msg += "\n".join(f"• {s}" for s in suggestions)
-                msg += "\n\nПопробуй ещё раз."
+                msg = t(
+                    "driver.name_suggestions", tg_id=tg_id,
+                    suggestions="\n".join(f"• {s}" for s in suggestions),
+                )
             else:
-                msg += "Проверь написание имени и фамилии.\nПример: Ivan Ivanov"
+                msg = t("driver.name_not_in_employees", tg_id=tg_id)
             await self._reply(
                 update,
                 msg,
@@ -339,19 +338,20 @@ class BotHandlers:
         if self.sheets.is_name_taken_by_other_driver(emp.name, tg_id):
             await self._reply(
                 update,
-                "⛔ Другой водитель уже зарегистрирован с этим именем.\n"
-                "Если это ошибка — обратись к администратору.",
+                t("driver.name_taken_by_other", tg_id=tg_id),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
 
         context.user_data["driver_name"] = emp.name
-        await self._reply(update, "Марка/модель машины?\nПример: Kia Rio")
+        await self._reply(update, t("driver.enter_car", tg_id=tg_id))
         return ST_DRIVER_CAR
 
     async def become_driver_car(self, update, context):
         context.user_data["driver_car"] = update.effective_message.text.strip()
-        await self._reply(update, "Licence Plates?\nПример: ABC123")
+        await self._reply(
+            update, t("driver.enter_plates", tg_id=update.effective_user.id),
+        )
         return ST_DRIVER_PLATES
 
     async def become_driver_plates(self, update, context):
@@ -419,7 +419,7 @@ class BotHandlers:
                 context, "Sheet write error (upsert driver)", str(e)[-1500:], update,
             )
             await self._reply(
-                update, "❌ Ошибка при сохранении. Попробуй ещё раз.",
+                update, t("driver.register_error", tg_id=tg_id),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
@@ -432,8 +432,8 @@ class BotHandlers:
         note = t("driver.phone_skipped" if skipped else "driver.phone_saved", tg_id=tg_id)
         await self._reply(
             update,
-            f"✅ Запись водителя сохранена. Город: {city}, {state}. {note}\n"
-            "Теперь можешь добавить пассажиров кнопкой «👥 Добавить пассажиров».",
+            t("driver.saved", tg_id=tg_id, city=city, state=state, note=note,
+              button=button("btn.add_passengers", tg_id)),
             reply_markup=self.kb_main(tg_id, True),
         )
         context.user_data.clear()
@@ -451,7 +451,7 @@ class BotHandlers:
         if not driver:
             await self._reply(
                 update,
-                "У тебя нет записи водителя.",
+                t("my_record.empty", tg_id=tg_id),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return
@@ -464,28 +464,26 @@ class BotHandlers:
 
         txt = ""
         if shift_removed:
-            txt += (
-                "⚠️ Пассажиры удалены из-за смены Shift:\n"
-                + "\n".join(f"• {n}" for n in shift_removed)
-                + "\n\n"
-            )
+            txt += t(
+                "passengers.shift_cleanup", tg_id=tg_id,
+                names="\n".join(f"• {n}" for n in shift_removed),
+            ) + "\n\n"
             await self.log_admin(
                 context, "Shift consistency cleanup (my_record)",
                 f"driver_tgid={tg_id} removed={shift_removed}", update,
             )
 
-        txt += (
-            f"📋 Твоя запись:\n\n"
-            f"👤 Имя: {driver.name}\n"
-            f"🚗 Машина: {driver.car}\n"
-            f"🔖 Licence Plates: {driver.plates}\n\n"
-        )
+        txt += t(
+            "my_record.text", tg_id=tg_id,
+            name=driver.name, car=driver.car, plates=driver.plates,
+        ) + "\n\n"
         if passengers:
-            txt += "👥 Пассажиры:\n" + "\n".join(
-                f"  {i+1}. {p}" for i, p in enumerate(passengers)
+            txt += t(
+                "my_record.passengers", tg_id=tg_id,
+                passengers="\n".join(f"  {i+1}. {p}" for i, p in enumerate(passengers)),
             )
         else:
-            txt += "👥 Пассажиры: нет"
+            txt += t("my_record.no_passengers", tg_id=tg_id)
 
         await self._reply(update, txt, reply_markup=self.kb_main(update.effective_user.id))
 
@@ -498,16 +496,15 @@ class BotHandlers:
         if not self.remember_role_and_check(tg_id):
             await self._reply(
                 update,
-                "У тебя нет записи водителя.",
+                t("my_record.empty", tg_id=tg_id),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
 
         await self._reply(
             update,
-            "Ты точно хочешь перестать быть водителем?\n\n"
-            "Я удалю твою запись водителя и отвяжу пассажиров.",
-            reply_markup=self.kb_yes_no(),
+            t("stop_driver.confirm", tg_id=tg_id),
+            reply_markup=self.kb_yes_no(tg_id),
         )
         return ST_STOP_CONFIRM
 
@@ -518,7 +515,7 @@ class BotHandlers:
         if intent == "unclear":
             await self._reply(
                 update,
-                "Не понял ответ 🤔 Нажми «✅ Да» или «❌ Нет» (или напиши «да» / «нет»).",
+                t("stop_driver.unclear", tg_id=tg_id),
                 reply_markup=self.kb_yes_no(update.effective_user.id),
             )
             return ST_STOP_CONFIRM
@@ -556,7 +553,7 @@ class BotHandlers:
                 )
                 await self._reply(
                     update,
-                    "❌ Ошибка при удалении. Попробуй ещё раз.",
+                    t("stop_driver.error", tg_id=tg_id),
                     reply_markup=self.kb_main(update.effective_user.id),
                 )
                 return ConversationHandler.END
@@ -569,14 +566,13 @@ class BotHandlers:
             )
             await self._reply(
                 update,
-                "✅ Готово! Ты больше не водитель.\n"
-                "Теперь тебя можно добавить пассажиром 😉",
+                t("stop_driver.done", tg_id=tg_id),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
         else:
             await self._reply(
                 update,
-                "Ок, ничего не меняю.",
+                t("stop_driver.nothing", tg_id=tg_id),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
 
@@ -591,8 +587,8 @@ class BotHandlers:
         if not self.remember_role_and_check(tg_id):
             await self._reply(
                 update,
-                "Сначала нужно стать водителем.\n"
-                "Нажми «🚗 Стать водителем» и заполни данные.",
+                t("passengers.not_a_driver", tg_id=tg_id,
+                  button=button("btn.become_driver", tg_id)),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
@@ -601,11 +597,10 @@ class BotHandlers:
         shift_removed = self.sheets.enforce_shift_consistency(tg_id)
         prefix = ""
         if shift_removed:
-            prefix = (
-                "⚠️ Пассажиры удалены из-за смены Shift:\n"
-                + "\n".join(f"• {n}" for n in shift_removed)
-                + "\n\n"
-            )
+            prefix = t(
+                "passengers.shift_cleanup", tg_id=tg_id,
+                names="\n".join(f"• {n}" for n in shift_removed),
+            ) + "\n\n"
             await self.log_admin(
                 context, "Shift consistency cleanup (add_passengers)",
                 f"driver_tgid={tg_id} removed={shift_removed}", update,
@@ -613,11 +608,7 @@ class BotHandlers:
 
         await self._reply(
             update,
-            prefix
-            + "Введи пассажиров (каждого с новой строки), максимум 4.\n\n"
-            "Пример:\n"
-            "Ivan Ivanov\n"
-            "Maria Ivanova",
+            prefix + t("passengers.enter", tg_id=tg_id),
         )
         return ST_ADD_PASSENGERS
 
@@ -641,7 +632,7 @@ class BotHandlers:
 
         # Нет новых валидных пассажиров — НЕ трогаем существующих
         if not valid:
-            parts = ["ℹ️ Никого не удалось добавить."]
+            parts = [t("passengers.nothing_added", tg_id=tg_id)]
             if warnings:
                 parts.append("\n".join(f"• {w}" for w in warnings))
             await self._reply(
@@ -669,7 +660,7 @@ class BotHandlers:
             overflow = [n for n in merged[4:] if n in new_names]
             merged = merged[:4]
             for name in overflow:
-                warnings.append(f"{name}: не помещается (максимум 4 пассажира).")
+                warnings.append(t("passengers.max_reached", tg_id=tg_id, name=name))
 
         dp = DriverPassengers(
             driver_name=driver.name,
@@ -702,7 +693,7 @@ class BotHandlers:
             )
             await self._reply(
                 update,
-                "❌ Произошла ошибка при сохранении. Попробуй ещё раз.",
+                t("passengers.error", tg_id=tg_id),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
@@ -718,8 +709,8 @@ class BotHandlers:
             try:
                 await context.bot.send_message(
                     chat_id=other_tgid,
-                    text=(f"ℹ️ {driver.name} вышел из твоего карпула — теперь он сам возит пассажиров.\n"
-                          "Список обновлён."),
+                    text=t("passengers.auto_unlink_notice", tg_id=other_tgid,
+                           name=driver.name),
                     reply_markup=self.kb_main(other_tgid),
                 )
             except Exception:
@@ -734,13 +725,13 @@ class BotHandlers:
             f"Driver {driver.name}\nAll: {', '.join(merged)}\nNew: {', '.join(new_names)}",
             update,
         )
-        parts = ["✅ Пассажиры сохранены."]
-        parts.append("👥 Добавлены:\n" + "\n".join(f"• {n}" for n in new_names))
+        parts = [t("passengers.saved", tg_id=tg_id)]
+        parts.append(t("passengers.added", tg_id=tg_id,
+                       names="\n".join(f"• {n}" for n in new_names)))
 
         if warnings:
-            parts.append(
-                "⛔ Пропущены:\n" + "\n".join(f"• {w}" for w in warnings)
-            )
+            parts.append(t("passengers.skipped", tg_id=tg_id,
+                           names="\n".join(f"• {w}" for w in warnings)))
 
         await self._reply(
             update,
@@ -765,8 +756,8 @@ class BotHandlers:
             )
             await self._reply(
                 update,
-                "⚠️ Пассажиры удалены из-за смены Shift:\n"
-                + "\n".join(f"• {n}" for n in shift_removed),
+                t("passengers.shift_cleanup", tg_id=tg_id,
+                  names="\n".join(f"• {n}" for n in shift_removed)),
             )
 
         dp = self.sheets.get_driver_passengers(tg_id)
@@ -774,7 +765,7 @@ class BotHandlers:
         if not dp or not dp.passengers:
             await self._reply(
                 update,
-                "У тебя нет пассажиров.",
+                t("remove_passenger.no_passengers", tg_id=tg_id),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
@@ -790,7 +781,7 @@ class BotHandlers:
         )
         await self._reply(
             update,
-            "Выбери пассажира для удаления (кнопкой ниже):",
+            t("remove_passenger.choose", tg_id=tg_id),
             reply_markup=kb,
         )
         return ST_REMOVE_PASSENGER
@@ -804,7 +795,7 @@ class BotHandlers:
         if not dp:
             await self._reply(
                 update,
-                "Нет данных о пассажирах.",
+                t("remove_passenger.no_data", tg_id=tg_id),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
@@ -818,7 +809,7 @@ class BotHandlers:
         if not match:
             await self._reply(
                 update,
-                "Пассажир не найден — попробуй снова.",
+                t("remove_passenger.not_found", tg_id=tg_id),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
@@ -841,7 +832,7 @@ class BotHandlers:
             )
             await self._reply(
                 update,
-                "❌ Ошибка при удалении. Попробуй ещё раз.",
+                t("remove_passenger.error", tg_id=tg_id),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
@@ -856,13 +847,14 @@ class BotHandlers:
             remaining = "\n".join(f"  {i+1}. {p}" for i, p in enumerate(dp.passengers))
             await self._reply(
                 update,
-                f"Пассажир «{match}» удалён.\n\nОставшиеся:\n{remaining}",
+                t("remove_passenger.done", tg_id=tg_id, name=match,
+                  remaining=remaining),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
         else:
             await self._reply(
                 update,
-                f"Пассажир «{match}» удалён. Список пассажиров пуст.",
+                t("remove_passenger.done_empty", tg_id=tg_id, name=match),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
 
@@ -877,10 +869,11 @@ class BotHandlers:
         dp = self.sheets.get_driver_passengers(tg_id)
         passengers = dp.passengers if dp else []
 
-        txt = "📅 Еженедельная проверка списка пассажиров\n\n"
-        txt += "Текущие пассажиры:\n"
-        txt += "\n".join(passengers) if passengers else "Нет пассажиров"
-        txt += "\n\nВсё актуально?"
+        pax_text = (
+            "\n".join(passengers) if passengers
+            else t("weekly.no_passengers", tg_id=tg_id)
+        )
+        txt = t("weekly.greeting", tg_id=tg_id, passengers=pax_text)
 
         await self.log_admin(
             context,
@@ -892,7 +885,7 @@ class BotHandlers:
             await context.bot.send_message(
                 chat_id=tg_id,
                 text=txt,
-                reply_markup=self.kb_yes_no(),
+                reply_markup=self.kb_yes_no(tg_id),
             )
         except Exception as e:
             await self.log_admin(
@@ -998,7 +991,7 @@ class BotHandlers:
                 await self.log_admin(context, "Admin access denied", "", update)
             await self._reply(
                 update,
-                "⛔ Эта команда доступна только администраторам.",
+                t("admin.not_authorized", tg_id=uid),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
@@ -1102,7 +1095,7 @@ class BotHandlers:
             await self.log_admin(context, "Admin weekly by shift failed", "telegramID column not found")
             await self._reply(
                 update,
-                "Произошла ошибка. Обратись к администратору.",
+                t("generic.error", tg_id=update.effective_user.id),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
@@ -1125,7 +1118,8 @@ class BotHandlers:
         )
         await self._reply(
             update,
-            f"Проверка отправлена {len(tgids)} водителям ({shift.to_display()}).",
+            t("admin.weekly_sent_shift", tg_id=update.effective_user.id,
+              count=len(tgids), shift=shift.to_display()),
             reply_markup=self.kb_main(update.effective_user.id),
         )
         return ConversationHandler.END
@@ -1154,20 +1148,17 @@ class BotHandlers:
             try:
                 await context.bot.send_message(
                     chat_id=tg_id,
-                    text="🔄 Бот обновлён! Клавиатура обновлена.\n"
-                         "Используй кнопки ниже:",
+                    text=t("admin.keyboard_update", tg_id=tg_id),
                     reply_markup=self.kb_main(tg_id),
                 )
                 sent += 1
             except Exception:
                 failed += 1
 
-        await self._reply(
-            update,
-            f"✅ Клавиатура отправлена: {sent} водителям.\n"
-            f"{'❌ Не удалось: ' + str(failed) if failed else ''}",
-            reply_markup=self.kb_main(uid),
-        )
+        result = t("admin.broadcast_keyboard_done", tg_id=uid, sent=sent)
+        if failed:
+            result += t("admin.broadcast_keyboard_failed", tg_id=uid, failed=failed)
+        await self._reply(update, result, reply_markup=self.kb_main(uid))
 
     # ======================================================
     # Broadcast message (admin only)
@@ -1183,7 +1174,7 @@ class BotHandlers:
         if not text.strip():
             await self._reply(
                 update,
-                "Напиши текст после команды.\nПример: /broadcast Завтра обновление смен",
+                t("admin.broadcast_usage", tg_id=uid),
                 reply_markup=self.kb_main(uid),
             )
             return ConversationHandler.END
@@ -1208,7 +1199,7 @@ class BotHandlers:
         if intent == "unclear":
             await self._reply(
                 update,
-                "Не понял. Нажми «✅ Да» для отправки или «❌ Нет» для отмены (можно написать «да»/«нет»).",
+                t("admin.broadcast_unclear", tg_id=uid),
                 reply_markup=self.kb_yes_no(uid),
             )
             return ST_BROADCAST_CONFIRM
@@ -1241,9 +1232,9 @@ class BotHandlers:
                 failed += 1
             await asyncio.sleep(0.1)
 
-        result = f"✅ Отправлено: {sent} водителям."
+        result = t("admin.broadcast_result", tg_id=uid, sent=sent)
         if failed:
-            result += f"\n❌ Не доставлено: {failed}"
+            result += t("admin.broadcast_failed_line", tg_id=uid, failed=failed)
 
         await self._reply(update, result, reply_markup=self.kb_main(uid))
         await self.log_admin(context, "Broadcast", f"sent={sent} failed={failed} text={text[:100]}", update)
@@ -1303,7 +1294,7 @@ class BotHandlers:
         except Exception:
             await self._reply(
                 update,
-                "Отчёт не найден. Сначала запусти generateBiWeeklyReport() в GAS.",
+                t("admin.report_not_found", tg_id=uid),
                 reply_markup=self.kb_main(uid),
             )
             return
@@ -1311,7 +1302,7 @@ class BotHandlers:
         if not svodka_values or len(svodka_values) < 2:
             await self._reply(
                 update,
-                "Отчёт пуст. Сначала запусти generateBiWeeklyReport() в GAS.",
+                t("admin.report_empty", tg_id=uid),
                 reply_markup=self.kb_main(uid),
             )
             return
@@ -1320,7 +1311,8 @@ class BotHandlers:
         label_a = header[1] if len(header) > 1 else "Week A"
         label_b = header[2] if len(header) > 2 else "Week B"
 
-        lines = [f"\U0001f4ca Сводка: {label_a} | {label_b}\n"]
+        lines = [t("admin.report_header", tg_id=uid,
+                   label_a=label_a, label_b=label_b)]
         for row in svodka_values[1:]:
             name = row[0] if len(row) > 0 else ""
             days_a = row[1] if len(row) > 1 else 0

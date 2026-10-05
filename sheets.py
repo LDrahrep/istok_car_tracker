@@ -1028,6 +1028,15 @@ class SheetManager:
                     return None
         return None
 
+    def sheet_titles(self) -> list[str]:
+        """Имена всех листов таблицы.
+
+        Нужно импорту: табели опознаются по суффиксу в имени листа
+        (…AMAZON, …BUFFALO), а их состав меняется каждую неделю, поэтому
+        перечислять их в конфиге нельзя.
+        """
+        return [ws.title for ws in self._retry(lambda: self._sheet().worksheets())]
+
     def carpool_counts(self) -> dict[int, int]:
         """telegramID -> сколько пассажиров записано.
 

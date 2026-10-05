@@ -65,23 +65,26 @@ STRINGS = {
     "btn.shift_meltech_night": "🔧🌙 Meltech Night",
 
     # ===== Start / общее =====
-    "start.greeting": "Привет! Выбери действие кнопкой ниже.",
-    "cancel.done": "Ок, отменено.",
+    "cancel.done": "Ок, отменил 👍",
+    "unknown.message": "Я не понял сообщение 🤔\nИспользуй кнопки на клавиатуре или команду /start",
 
     # ===== Стать водителем =====
     "driver.enter_name": "Напиши имя и фамилию.\nПример: Ivan Ivanov",
-    "driver.enter_car": "Напиши модель машины.\nПример: Toyota Camry",
-    "driver.enter_plates": "Напиши номер машины.\nПример: ABC 1234",
+    "driver.enter_car": "Марка/модель машины?\nПример: Kia Rio",
+    "driver.enter_plates": "Licence Plates?\nПример: ABC123",
     "driver.already_registered": "Ты уже зарегистрирован как водитель.\nЕсли хочешь обновить данные — сначала нажми «🛑 Перестать быть водителем».",
     "driver.already_passenger": "⛔ Ты уже записан как пассажир у водителя {driver}.\nПопроси его убрать тебя из списка, потом возвращайся.",
-    "driver.name_not_in_employees": "⛔ Такого сотрудника не нашёл.\nПроверь написание имени, или обратись к администратору.",
-    "driver.name_suggestions": "⛔ Такого сотрудника не нашёл.\nВозможно, ты имел в виду:\n{suggestions}",
+    "driver.name_not_in_employees": "Сотрудник не найден 😕\nПроверь написание имени и фамилии.\nПример: Ivan Ivanov",
+    "driver.name_suggestions": "Сотрудник не найден 😕\nВозможно, ты имел в виду:\n{suggestions}\n\nПопробуй ещё раз.",
     "driver.shift_unknown": "⛔ У тебя не указана смена.\nОбратись к администратору.",
     "driver.registered": "✅ Готово! Ты зарегистрирован как водитель.\nТеперь можешь добавлять пассажиров.",
-    "driver.register_error": "❌ Ошибка при регистрации. Попробуй ещё раз.",
+    "driver.register_error": "❌ Ошибка при сохранении. Попробуй ещё раз.",
+    "driver.name_taken_by_other": "⛔ Другой водитель уже зарегистрирован с этим именем.\nЕсли это ошибка — обратись к администратору.",
+    "driver.saved": "✅ Запись водителя сохранена. Город: {city}, {state}. {note}\nТеперь можешь добавить пассажиров кнопкой «{button}».",
 
     # ===== Stop being driver =====
-    "stop_driver.confirm": "Точно перестать быть водителем?\nВсе твои пассажиры станут свободными.",
+    "stop_driver.confirm": "Ты точно хочешь перестать быть водителем?\n\nЯ удалю твою запись водителя и отвяжу пассажиров.",
+    "stop_driver.unclear": "Не понял ответ 🤔 Нажми «✅ Да» или «❌ Нет» (или напиши «да» / «нет»).",
     "stop_driver.done": "✅ Готово! Ты больше не водитель.\nТеперь тебя можно добавить пассажиром 😉",
     "stop_driver.nothing": "Ок, ничего не меняю.",
     "stop_driver.error": "❌ Ошибка при удалении. Попробуй ещё раз.",
@@ -89,11 +92,15 @@ STRINGS = {
 
     # ===== Add passengers =====
     "passengers.enter": "Введи пассажиров (каждого с новой строки), максимум 4.\n\nПример:\nIvan Ivanov\nMaria Ivanova",
-    "passengers.not_a_driver": "⛔ Ты не зарегистрирован как водитель.\nСначала нажми «🚗 Стать водителем».",
-    "passengers.added": "✅ Добавлены: {names}",
-    "passengers.nothing_added": "⚠️ Никого не добавил.",
-    "passengers.max_reached": "⚠️ У тебя уже {count} пассажиров (максимум 4). Удали кого-то, потом добавляй новых.",
-    "passengers.error": "❌ Ошибка при добавлении. Попробуй ещё раз.",
+    "passengers.not_a_driver": "Сначала нужно стать водителем.\nНажми «{button}» и заполни данные.",
+    "passengers.added": "👥 Добавлены:\n{names}",
+    "passengers.saved": "✅ Пассажиры сохранены.",
+    "passengers.skipped": "⛔ Пропущены:\n{names}",
+    "passengers.shift_cleanup": "⚠️ Пассажиры удалены из-за смены Shift:\n{names}",
+    "passengers.auto_unlink_notice": "ℹ️ {name} вышел из твоего карпула — теперь он сам возит пассажиров.\nСписок обновлён.",
+    "passengers.nothing_added": "ℹ️ Никого не удалось добавить.",
+    "passengers.max_reached": "{name}: не помещается (максимум 4 пассажира).",
+    "passengers.error": "❌ Произошла ошибка при сохранении. Попробуй ещё раз.",
 
     # Пассажир-специфичные предупреждения
     "passenger_warning.not_found": "• {name}: сотрудника ещё не добавили.",
@@ -103,17 +110,20 @@ STRINGS = {
     "passenger_warning.self": "🙃 Водитель не может быть пассажиром — этот пункт пропущен.\nЕсли ты больше не водитель, нажми «🛑 Перестать быть водителем», и тогда тебя смогут добавить пассажиром.",
 
     # ===== Remove passenger =====
-    "remove_passenger.choose": "Выбери кого убрать:",
+    "remove_passenger.choose": "Выбери пассажира для удаления (кнопкой ниже):",
     "remove_passenger.no_passengers": "У тебя нет пассажиров.",
-    "remove_passenger.done": "✅ Пассажир {name} убран.",
-    "remove_passenger.not_found": "⚠️ Пассажир {name} не найден.",
+    "remove_passenger.done": "Пассажир «{name}» удалён.\n\nОставшиеся:\n{remaining}",
+    "remove_passenger.done_empty": "Пассажир «{name}» удалён. Список пассажиров пуст.",
+    "remove_passenger.no_data": "Нет данных о пассажирах.",
+    "remove_passenger.not_found": "Пассажир не найден — попробуй снова.",
     "remove_passenger.error": "❌ Ошибка при удалении. Попробуй ещё раз.",
     "remove_passenger.not_a_driver": "⛔ Ты не зарегистрирован как водитель.",
 
     # ===== My record =====
-    "my_record.empty": "У тебя нет записи. Нажми «🚗 Стать водителем».",
-    "my_record.text": "📋 Твоя запись:\n\n👤 Имя: {name}\n🚗 Машина: {car}\n🔢 Номер: {plates}\n📅 Смена: {shift}\n\n👥 Пассажиры ({count}):\n{passengers}",
-    "my_record.no_passengers": "— нет",
+    "my_record.empty": "У тебя нет записи водителя.",
+    "my_record.text": "📋 Твоя запись:\n\n👤 Имя: {name}\n🚗 Машина: {car}\n🔖 Licence Plates: {plates}",
+    "my_record.no_passengers": "👥 Пассажиры: нет",
+    "my_record.passengers": "👥 Пассажиры:\n{passengers}",
 
     # ===== Weekly check =====
     "weekly.greeting": "📅 Еженедельная проверка списка пассажиров\n\nТекущие пассажиры:\n{passengers}\n\nВсё актуально?",
@@ -126,18 +136,19 @@ STRINGS = {
     "weekly.expired_cleared": "⏰ Ты не ответил на еженедельную проверку за 2 часа.\nТвой список пассажиров очищен. Запись водителя сохранена — добавь актуальных пассажиров через «👥 Добавить пассажиров».",
 
     # ===== Admin =====
-    "admin.not_authorized": "⛔ У тебя нет доступа.",
+    "admin.not_authorized": "⛔ Эта команда доступна только администраторам.",
     "admin.weekly_choose_mode": "Как отправить проверку?",
     "admin.weekly_enter_tgid": "Введи Telegram ID водителя (число).\nПример: 123456789",
     "admin.weekly_tgid_invalid": "Telegram ID должен быть числом.\nПример: 123456789",
     "admin.weekly_driver_not_found": "Водитель с Telegram ID {driver_id} не найден.",
     "admin.weekly_choose_shift": "Выбери смену:",
     "admin.weekly_sent_tgid": "Проверка отправлена водителю (ID: {driver_id}).",
-    "admin.weekly_sent_shift": "Проверка отправлена {count} водителям смены {shift}.",
+    "admin.weekly_sent_shift": "Проверка отправлена {count} водителям ({shift}).",
     "admin.weekly_no_drivers": "Нет водителей в этой смене.",
     "admin.broadcast_usage": "Напиши текст после команды.\nПример: /broadcast Завтра обновление смен",
     "admin.broadcast_confirm": "Сообщение:\n\n{text}\n\nОтправить {count} водителям?",
     "admin.broadcast_cancelled": "Рассылка отменена.",
+    "admin.broadcast_unclear": "Не понял. Нажми «✅ Да» для отправки или «❌ Нет» для отмены (можно написать «да»/«нет»).",
     "admin.broadcast_text_lost": "Текст сообщения не найден. Попробуй ещё раз.",
     "admin.broadcast_result": "✅ Отправлено: {sent} водителям.",
     "admin.broadcast_failed_line": "\n❌ Не доставлено: {failed}",
@@ -155,4 +166,5 @@ STRINGS = {
     # ===== Generic =====
     "generic.use_buttons": "Используй кнопки ниже.",
     "generic.contact_admin": "Обратись к администратору.",
+    "generic.error": "Произошла ошибка. Обратись к администратору.",
 }

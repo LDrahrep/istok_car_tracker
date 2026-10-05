@@ -65,23 +65,26 @@ STRINGS = {
     "btn.shift_meltech_night": "🔧🌙 Meltech Night",
 
     # ===== Start / common =====
-    "start.greeting": "Hi! Choose an action using the button below.",
-    "cancel.done": "Ok, cancelled.",
+    "cancel.done": "Ok, cancelled 👍",
+    "unknown.message": "I didn't get that 🤔\nUse the keyboard buttons or the /start command",
 
     # ===== Become driver =====
     "driver.enter_name": "Enter your first and last name.\nExample: Ivan Ivanov",
-    "driver.enter_car": "Enter your car model.\nExample: Toyota Camry",
-    "driver.enter_plates": "Enter your license plate.\nExample: ABC 1234",
+    "driver.enter_car": "What car do you drive (make/model)?\nExample: Kia Rio",
+    "driver.enter_plates": "Licence Plates?\nExample: ABC123",
     "driver.already_registered": "You're already registered as a driver.\nIf you want to update your data — press \"🛑 Stop being a driver\" first.",
     "driver.already_passenger": "⛔ You are already registered as a passenger of driver {driver}.\nAsk them to remove you from the list, then come back.",
-    "driver.name_not_in_employees": "⛔ Employee not found.\nCheck the spelling, or contact the administrator.",
-    "driver.name_suggestions": "⛔ Employee not found.\nDid you mean:\n{suggestions}",
+    "driver.name_not_in_employees": "Employee not found 😕\nCheck how the first and last name are spelled.\nExample: Ivan Ivanov",
+    "driver.name_suggestions": "Employee not found 😕\nDid you mean:\n{suggestions}\n\nTry again.",
     "driver.shift_unknown": "⛔ Your shift is not specified.\nContact the administrator.",
     "driver.registered": "✅ Done! You're registered as a driver.\nYou can now add passengers.",
-    "driver.register_error": "❌ Registration error. Please try again.",
+    "driver.register_error": "❌ Couldn't save it. Try again.",
+    "driver.name_taken_by_other": "⛔ Another driver is already registered under this name.\nIf that's a mistake, contact the administrator.",
+    "driver.saved": "✅ Driver record saved. City: {city}, {state}. {note}\nNow you can add passengers with the \"{button}\" button.",
 
     # ===== Stop being driver =====
-    "stop_driver.confirm": "Are you sure you want to stop being a driver?\nAll your passengers will become free.",
+    "stop_driver.confirm": "Are you sure you want to stop being a driver?\n\nI'll delete your driver record and detach your passengers.",
+    "stop_driver.unclear": "Didn't catch that 🤔 Tap \"✅ Yes\" or \"❌ No\" (or just type \"yes\" / \"no\").",
     "stop_driver.done": "✅ Done! You're no longer a driver.\nNow someone can add you as a passenger 😉",
     "stop_driver.nothing": "Ok, nothing changed.",
     "stop_driver.error": "❌ Error while removing. Please try again.",
@@ -89,11 +92,15 @@ STRINGS = {
 
     # ===== Add passengers =====
     "passengers.enter": "Enter passengers (each on a new line), maximum 4.\n\nExample:\nIvan Ivanov\nMaria Ivanova",
-    "passengers.not_a_driver": "⛔ You are not registered as a driver.\nFirst press \"🚗 Become a driver\".",
-    "passengers.added": "✅ Added: {names}",
-    "passengers.nothing_added": "⚠️ No one was added.",
-    "passengers.max_reached": "⚠️ You already have {count} passengers (max 4). Remove someone before adding new ones.",
-    "passengers.error": "❌ Error while adding. Please try again.",
+    "passengers.not_a_driver": "You need to become a driver first.\nTap \"{button}\" and fill in your details.",
+    "passengers.added": "👥 Added:\n{names}",
+    "passengers.saved": "✅ Passengers saved.",
+    "passengers.skipped": "⛔ Skipped:\n{names}",
+    "passengers.shift_cleanup": "⚠️ Passengers removed because of a Shift change:\n{names}",
+    "passengers.auto_unlink_notice": "ℹ️ {name} left your carpool — they drive their own passengers now.\nThe list is updated.",
+    "passengers.nothing_added": "ℹ️ Couldn't add anyone.",
+    "passengers.max_reached": "{name}: doesn't fit (4 passengers max).",
+    "passengers.error": "❌ Something went wrong while saving. Try again.",
 
     # Passenger-specific warnings
     "passenger_warning.not_found": "• {name}: employee not added yet.",
@@ -103,17 +110,20 @@ STRINGS = {
     "passenger_warning.self": "🙃 A driver cannot be their own passenger — this entry was skipped.\nIf you're no longer a driver, press \"🛑 Stop being a driver\", then someone can add you as a passenger.",
 
     # ===== Remove passenger =====
-    "remove_passenger.choose": "Choose whom to remove:",
+    "remove_passenger.choose": "Pick the passenger to remove (use the buttons below):",
     "remove_passenger.no_passengers": "You have no passengers.",
-    "remove_passenger.done": "✅ Passenger {name} removed.",
-    "remove_passenger.not_found": "⚠️ Passenger {name} not found.",
+    "remove_passenger.done": "Passenger \"{name}\" removed.\n\nStill on the list:\n{remaining}",
+    "remove_passenger.done_empty": "Passenger \"{name}\" removed. Your passenger list is now empty.",
+    "remove_passenger.no_data": "No passenger data found.",
+    "remove_passenger.not_found": "Passenger not found — try again.",
     "remove_passenger.error": "❌ Error while removing. Please try again.",
     "remove_passenger.not_a_driver": "⛔ You are not registered as a driver.",
 
     # ===== My record =====
-    "my_record.empty": "You don't have a record. Press \"🚗 Become a driver\".",
-    "my_record.text": "📋 Your record:\n\n👤 Name: {name}\n🚗 Car: {car}\n🔢 Plates: {plates}\n📅 Shift: {shift}\n\n👥 Passengers ({count}):\n{passengers}",
-    "my_record.no_passengers": "— none",
+    "my_record.empty": "You don't have a driver record.",
+    "my_record.text": "📋 Your record:\n\n👤 Name: {name}\n🚗 Car: {car}\n🔖 Licence Plates: {plates}",
+    "my_record.no_passengers": "👥 Passengers: none",
+    "my_record.passengers": "👥 Passengers:\n{passengers}",
 
     # ===== Weekly check =====
     "weekly.greeting": "📅 Weekly passenger list check\n\nCurrent passengers:\n{passengers}\n\nEverything correct?",
@@ -126,18 +136,19 @@ STRINGS = {
     "weekly.expired_cleared": "⏰ You didn't respond to the weekly check within 2 hours.\nYour passenger list was cleared. Your driver record is kept — add current passengers via \"👥 Add passengers\".",
 
     # ===== Admin =====
-    "admin.not_authorized": "⛔ You don't have access.",
+    "admin.not_authorized": "⛔ This command is for administrators only.",
     "admin.weekly_choose_mode": "How to send the check?",
     "admin.weekly_enter_tgid": "Enter driver's Telegram ID (number).\nExample: 123456789",
     "admin.weekly_tgid_invalid": "Telegram ID must be a number.\nExample: 123456789",
     "admin.weekly_driver_not_found": "Driver with Telegram ID {driver_id} not found.",
     "admin.weekly_choose_shift": "Choose a shift:",
     "admin.weekly_sent_tgid": "Check sent to driver (ID: {driver_id}).",
-    "admin.weekly_sent_shift": "Check sent to {count} drivers of shift {shift}.",
+    "admin.weekly_sent_shift": "Check sent to {count} drivers ({shift}).",
     "admin.weekly_no_drivers": "No drivers on this shift.",
     "admin.broadcast_usage": "Write the text after the command.\nExample: /broadcast Shift update tomorrow",
     "admin.broadcast_confirm": "Message:\n\n{text}\n\nSend to {count} drivers?",
     "admin.broadcast_cancelled": "Broadcast cancelled.",
+    "admin.broadcast_unclear": "Didn't catch that. Tap \"✅ Yes\" to send or \"❌ No\" to cancel (typing \"yes\"/\"no\" works too).",
     "admin.broadcast_text_lost": "Message text not found. Please try again.",
     "admin.broadcast_result": "✅ Sent: {sent} drivers.",
     "admin.broadcast_failed_line": "\n❌ Failed: {failed}",
@@ -155,4 +166,5 @@ STRINGS = {
     # ===== Generic =====
     "generic.use_buttons": "Use the buttons below.",
     "generic.contact_admin": "Contact the administrator.",
+    "generic.error": "Something went wrong. Contact the administrator.",
 }
