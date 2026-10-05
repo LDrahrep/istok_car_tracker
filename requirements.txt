@@ -2,3 +2,4 @@ python-telegram-bot[job-queue]==20.7
 gspread==6.1.2
 google-auth==2.33.0
 psycopg[binary]==3.2.3
+tzdata==2025.2

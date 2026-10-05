@@ -15,11 +15,12 @@ Backfill важен по времени: week1..week4 — это очередь 
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import re
 import sys
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Iterable, Optional, Sequence
 from zoneinfo import ZoneInfo
 
@@ -27,7 +28,33 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Часовой пояс бизнеса. От него зависит, какой датой подписан снимок, поэтому
 # он должен совпадать с тем, что использует GAS (таймзона таблицы) и tabeli.
-CAPTURE_TZ = ZoneInfo(os.getenv("CAPTURE_TZ", "America/Chicago"))
+#
+# Падать тут нельзя ни при каких условиях: модуль импортируется из bot.py на
+# старте, и исключение здесь означало бы, что бот не поднимется вообще.
+# На slim-образах база часовых поясов бывает не установлена, поэтому в
+# requirements добавлен tzdata, а здесь оставлен откат на UTC.
+def _business_tz() -> ZoneInfo:
+    name = os.getenv("CAPTURE_TZ", "America/Chicago")
+    try:
+        return ZoneInfo(name)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).error(
+            "Часовой пояс %s недоступен (%s) — откат на UTC. "
+            "Снимок будет сниматься не в то время; поставь пакет tzdata.",
+            name, exc,
+        )
+        return ZoneInfo("UTC") if _utc_available() else timezone.utc
+
+
+def _utc_available() -> bool:
+    try:
+        ZoneInfo("UTC")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+CAPTURE_TZ = _business_tz()
 
 MAX_PASSENGERS = 4
 SNAPSHOT_KEY_RE = re.compile(r"^SK\|(\d{4}-\d{2}-\d{2})\|")
