@@ -36,7 +36,15 @@ ON CONFLICT (telegram_id, snapshot_date) DO UPDATE SET
     source        = EXCLUDED.source,
     captured_at   = now(),
     capture_count = carpool_snapshot.capture_count + 1
-RETURNING (xmax = 0) AS inserted
+"""
+
+# Сколько из переносимых пар уже лежит в базе. Нужно, чтобы отличить
+# «вставлено» от «обновлено» одним запросом вместо RETURNING на каждой строке.
+COUNT_EXISTING_SQL = """
+SELECT count(*) FROM carpool_snapshot
+WHERE (telegram_id, snapshot_date) IN (
+    SELECT * FROM unnest(%s::bigint[], %s::date[])
+)
 """
 
 
@@ -50,9 +58,14 @@ def enabled() -> bool:
 
 
 def _connect():
+    """Соединение с обязательным таймаутом.
+
+    Без connect_timeout psycopg ждёт бесконечно и молча: команда «висит»,
+    не отдавая ни ошибки, ни результата. Лучше честно упасть за 10 секунд.
+    """
     import psycopg
 
-    return psycopg.connect(dsn())
+    return psycopg.connect(dsn(), connect_timeout=10)
 
 
 def apply_schema() -> bool:
@@ -74,18 +87,28 @@ def apply_schema() -> bool:
 
 
 def _write(conn, rows: list[SnapshotRow], source: str) -> tuple[int, int]:
-    inserted = updated = 0
+    """Пишет пачкой, возвращает (вставлено, обновлено).
+
+    Раньше тут был RETURNING на каждой строке — 1600 отдельных round-trip'ов
+    на один week-лист, то есть десятки секунд. Теперь два запроса: посчитать
+    уже существующие пары и отправить весь пакет одним executemany.
+    """
+    if not rows:
+        return 0, 0
+
+    params = [
+        (r.snapshot_date, r.telegram_id, r.driver_name, r.phone,
+         r.shift_raw, r.site_raw, r.passengers, source)
+        for r in rows
+    ]
     with conn.cursor() as cur:
-        for row in rows:
-            cur.execute(UPSERT_SQL, (
-                row.snapshot_date, row.telegram_id, row.driver_name, row.phone,
-                row.shift_raw, row.site_raw, row.passengers, source,
-            ))
-            if cur.fetchone()[0]:
-                inserted += 1
-            else:
-                updated += 1
-    return inserted, updated
+        cur.execute(COUNT_EXISTING_SQL, (
+            [r.telegram_id for r in rows],
+            [r.snapshot_date for r in rows],
+        ))
+        already = cur.fetchone()[0]
+        cur.executemany(UPSERT_SQL, params)
+    return len(rows) - already, already
 
 
 def capture(sheets, sheet_name: str, *, source: str,
