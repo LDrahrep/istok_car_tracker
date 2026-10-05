@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -186,7 +186,25 @@ def status() -> dict:
             " ORDER BY started_at DESC LIMIT 5"
         )
         runs = cur.fetchall()
+        cur.execute(
+            "SELECT snapshot_date, count(*) FROM carpool_snapshot"
+            " GROUP BY snapshot_date ORDER BY snapshot_date"
+        )
+        per_day = cur.fetchall()
+
+    # Пропуски важнее общего числа дней: «22 дня» звучит хорошо, но если
+    # внутри дыра в неделю, то за эту неделю доплаты посчитать нечем.
+    gaps: list[date] = []
+    if first and last:
+        have = {d for d, _ in per_day}
+        cursor = first
+        while cursor <= last:
+            if cursor not in have:
+                gaps.append(cursor)
+            cursor += timedelta(days=1)
+
     return {
         "enabled": True, "rows": rows, "drivers": drivers,
         "first": first, "last": last, "days": days, "runs": runs,
+        "per_day": per_day, "gaps": gaps,
     }

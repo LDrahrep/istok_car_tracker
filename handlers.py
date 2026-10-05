@@ -1388,6 +1388,22 @@ class BotHandlers:
             f"Дней истории: {info['days']}",
             f"Период: {info['first']} — {info['last']}",
         ]
+
+        gaps = info.get("gaps") or []
+        if gaps:
+            lines.append(f"\n⚠️ ПРОПУЩЕНО ДНЕЙ: {len(gaps)}")
+            if len(gaps) <= 14:
+                lines.append("  " + ", ".join(str(d) for d in gaps))
+            else:
+                lines.append(f"  {gaps[0]} … {gaps[-1]}")
+        else:
+            lines.append("\n✅ Пропусков нет, история непрерывна")
+
+        per_day = info.get("per_day") or []
+        if per_day:
+            lines.append("\nПо дням (водителей):")
+            for d, cnt in per_day:
+                lines.append(f"  {d}: {cnt}")
         if info["runs"]:
             lines.append("\nПоследние прогоны:")
             for source, started, written, updated, skipped, error in info["runs"]:
