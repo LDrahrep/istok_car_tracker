@@ -10,6 +10,7 @@ from telegram.request import HTTPXRequest
 
 from telegram.ext import (
     Application,
+    ApplicationHandlerStop,
     CommandHandler,
     MessageHandler,
     ConversationHandler,
@@ -19,6 +20,7 @@ from telegram.ext.filters import MessageFilter
 
 from config import Config
 from i18n import all_translations, button_regex
+from intent import parse_yes_no_intent
 from persistence import get_state_manager
 from sheets import SheetManager
 from handlers import (
@@ -76,6 +78,32 @@ class _PendingWeeklyFilter(MessageFilter):
             return state.is_pending(message.from_user.id)
         except Exception:
             return False
+
+
+class _WeeklyYesNoFilter(MessageFilter):
+    """Matches an unambiguous yes/no from a user with an open weekly-check.
+
+    Deliberately narrow: only a clear да/нет. Anything else — a passenger name,
+    a car model, a plate — keeps flowing to whatever conversation the user is
+    in, so this can never swallow real input.
+    """
+
+    name = "WeeklyYesNoFilter"
+
+    def __init__(self, state_path: str):
+        super().__init__()
+        self._state_path = state_path
+
+    def filter(self, message):
+        if not message or not message.text or not message.from_user:
+            return False
+        try:
+            state = get_state_manager(self._state_path)
+            if not state.is_pending(message.from_user.id):
+                return False
+        except Exception:
+            return False
+        return parse_yes_no_intent(message.text) in ("yes", "no")
 
 
 def build_app():
@@ -141,7 +169,27 @@ def build_app():
             payload,
         )
 
-    app.add_handler(MessageHandler(filters.ALL, log_incoming_railway), group=-1)
+    # Логируем всё в самой ранней группе — она ничего не перехватывает.
+    app.add_handler(MessageHandler(filters.ALL, log_incoming_railway), group=-2)
+
+    # Ответ на еженедельную проверку разбираем ДО ConversationHandler.
+    #
+    # Иначе «Да» достаётся залипшему состоянию диалога (например
+    # ST_ADD_PASSENGERS) и уходит в add_passengers_input как ИМЯ пассажира:
+    # водитель видит «Никого не удалось добавить», проверка остаётся
+    # неотвеченной, и через 2 часа expire_job стирает ему весь список
+    # пассажиров. Так терялись карпулы целыми неделями.
+    weekly_yes_no_filter = _WeeklyYesNoFilter(config.STATE_FILE)
+
+    async def weekly_answer_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await handlers.weekly_answer(update, context)
+        # Диалог не должен увидеть этот ответ вторым обработчиком.
+        raise ApplicationHandlerStop
+
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & weekly_yes_no_filter,
+        weekly_answer_priority,
+    ), group=-1)
 
     # Regex patterns that match buttons in any supported language
     re_become_driver     = f"^({button_regex('btn.become_driver')})$"
@@ -225,6 +273,9 @@ def build_app():
             MessageHandler(filters.Regex(re_cancel), handlers.cancel),
         ],
         allow_reentry=True,
+        # Без таймаута брошенный диалог живёт вечно, и любой следующий текст
+        # (в т.ч. ответ на еженедельную проверку) уходит в него.
+        conversation_timeout=30 * 60,
     )
 
     app.add_handler(conv)
