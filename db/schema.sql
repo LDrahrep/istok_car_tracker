@@ -50,3 +50,72 @@ CREATE TABLE IF NOT EXISTS capture_run (
     rows_skipped integer     NOT NULL DEFAULT 0,
     error        text
 );
+
+-- ────────────────────────────────────────────────────────────────────────
+-- Этап 2: нормализованная модель.
+--
+-- Решения, которые она реализует (гриль 05.10.2026):
+--   • объект — отдельная сущность, а не суффикс в имени листа и не часть
+--     значения смены («Meltech Day»). Новый объект = одна строка;
+--   • смена — только day/night;
+--   • у человека есть «текущий объект» для удобства и как тай-брейк, но
+--     истина для доплат — факт присутствия за конкретный день;
+--   • emp_uuid из tabeli хранится рядом, но ключом быть не может: бейджи
+--     сканируют только на AMAZON, у остальных его нет.
+-- ────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS site (
+    id         text        PRIMARY KEY,   -- AMAZON, MELTECH, COLUMBUS, BUFFALO
+    name       text        NOT NULL,
+    is_active  boolean     NOT NULL DEFAULT true,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS person (
+    id              bigserial   PRIMARY KEY,
+    -- Ключ из tabeli. Есть не у всех, поэтому UNIQUE, но не NOT NULL.
+    emp_uuid        text        UNIQUE,
+    full_name       text        NOT NULL,
+    -- Нормализованное имя: отсортированные токены в нижнем регистре.
+    -- Ловит перестановку «Иванов Иван» / «Иван Иванов», на которой
+    -- сопоставление по сырому имени регулярно разъезжалось.
+    name_key        text        NOT NULL UNIQUE,
+    shift           text        NOT NULL DEFAULT 'unknown'
+                                CHECK (shift IN ('day', 'night', 'unknown')),
+    -- Только у водителей: пассажиры ботом не пользуются.
+    telegram_id     bigint      UNIQUE,
+    -- Удобство и тай-брейк при конфликте, НЕ источник истины для доплат.
+    current_site_id text        REFERENCES site(id),
+    is_active       boolean     NOT NULL DEFAULT true,
+    updated_at      timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS person_site_idx ON person (current_site_id);
+CREATE INDEX IF NOT EXISTS person_shift_idx ON person (shift);
+
+-- Факт присутствия: кто, когда, на каком объекте. Именно это решает,
+-- какому объекту засчитать день, — а не current_site_id.
+CREATE TABLE IF NOT EXISTS presence (
+    person_id  bigint      NOT NULL REFERENCES person(id) ON DELETE CASCADE,
+    work_date  date        NOT NULL,
+    site_id    text        NOT NULL REFERENCES site(id),
+    source     text        NOT NULL,      -- 'timesheet:<лист>' | 'tabeli'
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (person_id, work_date, site_id)
+);
+
+CREATE INDEX IF NOT EXISTS presence_date_idx ON presence (work_date);
+CREATE INDEX IF NOT EXISTS presence_site_date_idx ON presence (site_id, work_date);
+
+-- Журнал изменений. Append-only: ответ на вопрос «кто и когда это стёр»,
+-- которого нам не хватало весь сентябрь.
+CREATE TABLE IF NOT EXISTS audit_log (
+    id         bigserial   PRIMARY KEY,
+    happened_at timestamptz NOT NULL DEFAULT now(),
+    actor      text        NOT NULL,      -- 'bot:<tg_id>' | 'import' | 'admin'
+    action     text        NOT NULL,
+    subject    text,
+    details    jsonb
+);
+
+CREATE INDEX IF NOT EXISTS audit_log_time_idx ON audit_log (happened_at DESC);
