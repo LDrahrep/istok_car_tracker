@@ -1,4 +1,17 @@
 STRINGS = {
+    # ===== Карточка водителя, телефон, смены =====
+    'btn.skip': '⏭ Skip',
+    'driver.ask_phone': 'Add a phone number — passengers can reach you if you have no @username on Telegram.\n\nThis is optional: tap "⏭ Skip" if you\'d rather not share it.',
+    'driver.phone_saved': 'Number saved.',
+    'driver.phone_skipped': 'Fine, no number then.',
+    'shift.day': '☀️ day',
+    'shift.night': '🌙 night',
+    'shift.meltech_day': '🔧☀️ Meltech day',
+    'shift.meltech_night': '🔧🌙 Meltech night',
+    'card.seats_free': '{free} of {total} seats free',
+    'card.seats_full': 'car is full',
+    'card.no_contact': 'no contact — ask the administrator',
+
     # ===== Роли, помощь, открепление =====
     'leave.error': "❌ Couldn't detach you. Try again or contact your administrator.",
     'btn.leave_carpool': '🚶 I no longer ride with my driver',

@@ -126,3 +126,55 @@ def test_role_cache_unknown_user():
     h._role_cache = {}
     assert h.known_role(123) is None
     assert h.known_role(None) is None
+
+
+# ─────────────────────── карточка водителя в поиске ───────────────────────
+
+def _card(**kw):
+    from handlers import BotHandlers
+    from models import Driver
+
+    defaults = dict(name="Aldar Rakshaev", tg_id=1, username="aldar",
+                    phone="", car="Toyota RAV4", plates="ABC123",
+                    shift="Day", city="San Jose", state="CA")
+    defaults.update(kw)
+    taken = defaults.pop("taken", None)
+    h = BotHandlers.__new__(BotHandlers)
+    return h._driver_card(Driver(**defaults), viewer_id=None, taken=taken)
+
+
+def test_card_shows_shift_and_free_seats():
+    card = _card(taken=2)
+    assert "Aldar Rakshaev" in card
+    assert "☀️ день" in card, "смена должна быть видна"
+    assert "свободно 2 из 4" in card
+    assert "t.me/aldar" in card
+
+
+def test_card_marks_full_car():
+    """Пассажир не должен писать тому, у кого мест нет."""
+    assert "мест нет" in _card(taken=4)
+    assert "свободно" not in _card(taken=4)
+
+
+def test_card_night_shift():
+    assert "🌙 ночь" in _card(shift="Night", taken=0)
+
+
+def test_card_without_contact_says_so():
+    card = _card(username="", phone="", taken=1)
+    assert "контакта нет" in card
+    assert "t.me/" not in card
+
+
+def test_card_phone_shown_when_given():
+    card = _card(username="", phone="+1 408 555 0101", taken=1)
+    assert "📞 +1 408 555 0101" in card
+    assert "контакта нет" not in card
+
+
+def test_card_without_seat_data_omits_seats():
+    """Если число пассажиров не удалось получить — просто не пишем про места."""
+    card = _card(taken=None)
+    assert "свободно" not in card and "мест нет" not in card
+    assert "Toyota RAV4" in card

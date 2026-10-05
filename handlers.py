@@ -18,6 +18,9 @@ from persistence import get_state_manager
 
 logger = logging.getLogger(__name__)
 
+# Жёсткий предел вместимости карпула — тот же, что в schema БД.
+MAX_PASSENGERS = 4
+
 
 (
     ST_DRIVER_NAME,
@@ -36,7 +39,8 @@ logger = logging.getLogger(__name__)
     ST_SEARCH_VALUE,
     ST_LEAVE_NAME,
     ST_LEAVE_CONFIRM,
-) = range(20, 36)
+    ST_DRIVER_PHONE,
+) = range(20, 37)
 
 
 # Полные названия штатов США → 2-буквенный код (чтобы понимать «California» = CA).
@@ -376,6 +380,28 @@ class BotHandlers:
             return ST_DRIVER_CITY
 
         city, state = matches[0]
+        context.user_data["driver_city"] = city
+        context.user_data["driver_state"] = state
+        kb = ReplyKeyboardMarkup(
+            [[button("btn.skip", tg_id)]], resize_keyboard=True, one_time_keyboard=True,
+        )
+        await self._reply(update, t("driver.ask_phone", tg_id=tg_id), reply_markup=kb)
+        return ST_DRIVER_PHONE
+
+    async def become_driver_phone(self, update, context):
+        """Телефон — по желанию.
+
+        Требовать личный номер не хотим, но без него у водителя без
+        @username в карточке поиска не остаётся никакого контакта.
+        Поэтому предлагаем, а не обязываем.
+        """
+        tg_id = update.effective_user.id
+        raw = (update.effective_message.text or "").strip()
+        skipped = is_button(raw, "btn.skip")
+        phone = "" if skipped else raw
+
+        city = context.user_data.get("driver_city", "")
+        state = context.user_data.get("driver_state", "")
         driver = Driver(
             name=context.user_data["driver_name"],
             tg_id=tg_id,
@@ -384,6 +410,7 @@ class BotHandlers:
             plates=context.user_data["driver_plates"],
             city=city,
             state=state,
+            phone=phone,
         )
         try:
             self.sheets.upsert_driver(driver)
@@ -401,12 +428,15 @@ class BotHandlers:
             context, "Driver created/updated",
             f"{driver.name} ({tg_id}) {city}, {state}", update,
         )
+        self.remember_role(tg_id, True)
+        note = t("driver.phone_skipped" if skipped else "driver.phone_saved", tg_id=tg_id)
         await self._reply(
             update,
-            f"✅ Запись водителя сохранена. Город: {city}, {state}.\n"
+            f"✅ Запись водителя сохранена. Город: {city}, {state}. {note}\n"
             "Теперь можешь добавить пассажиров кнопкой «👥 Добавить пассажиров».",
-            reply_markup=self.kb_main(update.effective_user.id),
+            reply_markup=self.kb_main(tg_id, True),
         )
+        context.user_data.clear()
         return ConversationHandler.END
 
     # ======================================================
@@ -1355,16 +1385,46 @@ class BotHandlers:
             return ST_SEARCH_MODE
         return ST_SEARCH_VALUE
 
-    def _driver_card(self, d) -> str:
-        parts = [f"👤 {d.name}"]
+    _SHIFT_KEYS = {
+        ShiftType.DAY: "shift.day",
+        ShiftType.NIGHT: "shift.night",
+        ShiftType.MELTECH_DAY: "shift.meltech_day",
+        ShiftType.MELTECH_NIGHT: "shift.meltech_night",
+    }
+
+    def _driver_card(self, d, viewer_id=None, taken: Optional[int] = None) -> str:
+        """Карточка водителя в выдаче поиска.
+
+        Показываем смену и свободные места: без них пассажир пишет тому, у
+        кого машина уже полная, или ночнику, работая в день. Данные у нас
+        есть, скрывать их незачем.
+        """
+        head = f"👤 {d.name}"
+        shift_key = self._SHIFT_KEYS.get(ShiftType.from_string(d.shift or ""))
+        if shift_key:
+            head += f" · {t(shift_key, tg_id=viewer_id)}"
+
+        parts = [head]
+
+        second = []
         if d.car:
-            parts.append(f"🚗 {d.car}")
+            second.append(f"🚗 {d.car}")
+        if taken is not None:
+            free = max(0, MAX_PASSENGERS - taken)
+            second.append(
+                t("card.seats_free", tg_id=viewer_id, free=free, total=MAX_PASSENGERS)
+                if free else t("card.seats_full", tg_id=viewer_id)
+            )
+        if second:
+            parts.append(" · ".join(second))
+
         contact = []
         if d.username:
             contact.append(f"t.me/{d.username}")
         if d.phone:
             contact.append(f"📞 {d.phone}")
-        parts.append(" · ".join(contact) if contact else "контакт не указан")
+        parts.append(" · ".join(contact) if contact
+                     else t("card.no_contact", tg_id=viewer_id))
         return "\n".join(parts)
 
     async def search_value(self, update, context):
@@ -1410,8 +1470,19 @@ class BotHandlers:
             )
             return ConversationHandler.END
 
+        try:
+            counts = await asyncio.to_thread(self.sheets.carpool_counts)
+        except Exception:
+            counts = {}
+
+        # Сначала те, у кого есть свободные места.
+        drivers.sort(key=lambda d: counts.get(int(d.tg_id), 0) >= MAX_PASSENGERS)
+
         header = t("search.header", tg_id=tg_id, where=where)
-        text = header + "\n\n" + "\n\n".join(self._driver_card(d) for d in drivers)
+        text = header + "\n\n" + "\n\n".join(
+            self._driver_card(d, viewer_id=tg_id, taken=counts.get(int(d.tg_id)))
+            for d in drivers
+        )
         # Telegram лимит 4096 — режем на части
         for i in range(0, len(text), 4000):
             await self._reply(

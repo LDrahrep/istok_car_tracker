@@ -42,6 +42,7 @@ from handlers import (
     ST_SEARCH_VALUE,
     ST_LEAVE_NAME,
     ST_LEAVE_CONFIRM,
+    ST_DRIVER_PHONE,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -253,6 +254,9 @@ def build_app():
             ],
             ST_SEARCH_VALUE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.search_value)
+            ],
+            ST_DRIVER_PHONE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.become_driver_phone)
             ],
             ST_LEAVE_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.leave_carpool_name)

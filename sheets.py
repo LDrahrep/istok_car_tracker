@@ -321,6 +321,10 @@ class SheetManager:
             put("City", driver.city)
             put("State", driver.state)
             put("isActive", "TRUE" if driver.is_active else "FALSE")
+            # Телефон необязателен: пишем только если водитель его дал.
+            # Пустым значением затирать нельзя — номер мог вписать админ.
+            if driver.phone:
+                put("Phone Number", driver.phone)
 
             ws.batch_update(updates)
             self._invalidate(self.config.DRIVERS_SHEET)
@@ -334,6 +338,7 @@ class SheetManager:
 
             for key, value in (
                 ("Username", driver.username),
+                ("Phone Number", driver.phone),
                 ("Car", driver.car),
                 ("Plates", driver.plates),
                 ("City", driver.city),
@@ -1022,6 +1027,32 @@ class SheetManager:
                 except Exception:
                     return None
         return None
+
+    def carpool_counts(self) -> dict[int, int]:
+        """telegramID -> сколько пассажиров записано.
+
+        Один проход по листу на весь список водителей: в выдаче поиска их
+        бывает несколько десятков, и поштучные запросы выбрали бы квоту
+        Google (60 запросов в минуту) с одного нажатия кнопки.
+        """
+        values = self._values(self.config.DRIVERS_PASSENGERS_SHEET)
+        if not values:
+            return {}
+        col = self._col_map(values[0])
+        tg_col = col.get("telegramID")
+        if tg_col is None:
+            return {}
+        p_cols = [col[k] for k in ("Passenger1", "Passenger2", "Passenger3", "Passenger4")
+                  if k in col]
+        counts: dict[int, int] = {}
+        for row in values[1:]:
+            raw = str(row[tg_col]).strip() if tg_col < len(row) else ""
+            if not raw.isdigit():
+                continue
+            counts[int(raw)] = sum(
+                1 for c in p_cols if c < len(row) and str(row[c]).strip()
+            )
+        return counts
 
     def driver_own_passenger_count(self, name: str) -> int:
         """Сколько СВОИХ пассажиров у водителя с этим именем (0, если не водитель)."""
