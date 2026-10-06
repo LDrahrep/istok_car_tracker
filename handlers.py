@@ -1739,6 +1739,58 @@ class BotHandlers:
         text = "\n".join(lines)
         await self._reply(update, text[:4000], reply_markup=self.kb_main(uid))
 
+    async def db_export_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Выгрузка из БД обратно в таблицу. /db_export [лист]
+
+        Пишет только в листы «_db_*» — их не читает ни бот, ни GAS, поэтому
+        второго писателя ни у одной существующей сущности не появляется.
+        """
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+
+        args = context.args or []
+        only = args[0].strip() if args else None
+        await self._reply(update, "⏳ выгружаю в таблицу…")
+
+        from db import export as db_export
+
+        try:
+            info = await asyncio.to_thread(db_export.export, self.sheets, only)
+        except Exception as e:
+            logger.exception("export failed")
+            await self._reply(
+                update, f"❌ Ошибка: {e}", reply_markup=self.kb_main(uid)
+            )
+            return
+
+        if not info.get("enabled"):
+            await self._reply(
+                update,
+                "⚪️ БД выключена: переменная DATABASE_URL не задана.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        sheets_written = info["sheets"]
+        if not sheets_written:
+            await self._reply(
+                update,
+                "Ни одна выгрузка не подошла под фильтр.\n"
+                "Доступны: " + ", ".join(e.title for e in db_export.EXPORTS),
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        lines = ["✅ Выгружено в таблицу", ""]
+        for title, count in sheets_written.items():
+            lines.append(f"• {title}: {count} строк")
+        lines.append(
+            "\nЛисты перезаписываются целиком при каждой выгрузке — "
+            "править их смысла нет, правки затрутся."
+        )
+        await self._reply(update, "\n".join(lines), reply_markup=self.kb_main(uid))
+
     async def _run_capture(self, update, uid, work, label: str):
         """Общая обвязка для команд захвата: прогресс, запуск, отчёт."""
         await self._reply(update, f"⏳ {label}…")

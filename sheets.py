@@ -1029,6 +1029,36 @@ class SheetManager:
         """
         return [ws.title for ws in self._retry(lambda: self._open().worksheets())]
 
+    def replace_sheet(self, title: str, values: list[list[str]]):
+        """Перезаписать лист целиком. Только для выгрузок из БД.
+
+        Защита от промаха именем стоит здесь, а не только у вызывающего:
+        метод стирает лист перед записью, и опечатка в названии означала бы
+        стёртый `employees`. Префикс проверяется до любого обращения к Google.
+        """
+        from db.export import check_target
+
+        check_target(title)
+        rows = max(len(values), 1)
+        cols = max((len(r) for r in values), default=1)
+
+        sheet = self._open()
+        try:
+            ws = self._retry(lambda: sheet.worksheet(title))
+        except gspread.exceptions.WorksheetNotFound:
+            ws = self._retry(
+                lambda: sheet.add_worksheet(title=title, rows=rows + 10, cols=cols)
+            )
+        else:
+            # Лист должен вмещать выгрузку целиком: update за границы
+            # существующего диапазона Sheets не выполнит.
+            self._retry(lambda: ws.resize(rows=rows + 10, cols=max(cols, ws.col_count)))
+            self._retry(ws.clear)
+
+        self._retry(lambda: ws.update(values=values, range_name="A1"))
+        self._invalidate(title)
+        return len(values) - 1
+
     def carpool_counts(self) -> dict[int, int]:
         """telegramID -> сколько пассажиров записано.
 
