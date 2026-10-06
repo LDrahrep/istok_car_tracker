@@ -558,6 +558,11 @@ class BotHandlers:
                 )
                 return ConversationHandler.END
 
+            # Роль изменилась — кэш обязан узнать об этом сразу. Иначе
+            # known_role ещё 15 минут (TTL) отвечает «водитель», и человек
+            # получает меню с кнопками, которые ему больше не доступны.
+            self.remember_role(tg_id, False)
+
             await self.log_admin(
                 context,
                 "Driver stopped being driver",

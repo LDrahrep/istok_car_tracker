@@ -316,3 +316,55 @@ def test_reason_without_params_renders():
 
     line, = _render([Reason("passenger_warning.too_many")], "en")
     assert line == en.STRINGS["passenger_warning.too_many"]
+
+
+# ─────────────── смена роли должна сразу менять меню ───────────────
+
+def test_menu_switches_right_after_quitting_as_driver():
+    """Кэш роли живёт 15 минут — и это ловушка при смене роли.
+
+    Реальный случай: человек нажал «Перестать быть водителем», получил
+    «Готово, ты больше не водитель» — и клавиатуру с кнопками «Добавить
+    пассажиров» и «Удалить пассажира». Кэш всё ещё отвечал «водитель»,
+    потому что обработчик удалял запись, но кэш не трогал.
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    from handlers import BotHandlers
+
+    class _Sheets:
+        def get_driver_passengers(self, tg_id): return None
+        def get_driver(self, tg_id): return None
+        def delete_driver_passengers(self, tg_id): return True
+        def delete_driver(self, tg_id): return None
+        def clear_rides_with(self, names): return 0
+
+    h = BotHandlers.__new__(BotHandlers)
+    h.config = _Cfg()
+    h._role_cache = {}
+    h.sheets = _Sheets()
+    h.remember_role(7, True)
+
+    seen = {}
+
+    async def _reply(update, text, **kwargs):
+        seen["markup"] = kwargs.get("reply_markup")
+
+    async def _log_admin(*args, **kwargs):
+        return None
+
+    h._reply = _reply
+    h.log_admin = _log_admin
+
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=7),
+        effective_message=SimpleNamespace(text=ru.STRINGS["btn.yes"]),
+    )
+    asyncio.run(h.stop_being_driver_confirm(update, None))
+
+    assert h.known_role(7) is False, "кэш не узнал о смене роли"
+    texts = [b.text for row in seen["markup"].keyboard for b in row]
+    assert ru.STRINGS["btn.add_passengers"] not in texts, "меню осталось водительским"
+    assert ru.STRINGS["btn.stop_being_driver"] not in texts
+    assert ru.STRINGS["btn.become_driver"] in texts
