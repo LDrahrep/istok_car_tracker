@@ -151,3 +151,76 @@ CREATE TABLE IF NOT EXISTS carpool (
 
 CREATE INDEX IF NOT EXISTS carpool_driver_date_idx ON carpool (driver_id, ride_date);
 CREATE INDEX IF NOT EXISTS carpool_date_idx ON carpool (ride_date);
+
+-- ────────────────────────────────────────────────────────────────────────
+-- Вьюхи для ручного разбора в админке.
+--
+-- Нужны потому, что сырые таблицы читаются плохо: passengers лежит
+-- массивом и в гриде выглядит как {Иванов,Петров}, а вопросы у
+-- администратора совсем другие — «с кем ездил этот человек», «кто
+-- записан дважды», «кого нет в ростере». CREATE OR REPLACE —
+-- пересоздаются при каждом старте бота вместе со схемой.
+-- ────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE VIEW v_carpool_day AS
+SELECT s.snapshot_date            AS дата,
+       s.driver_name              AS водитель,
+       s.shift_raw                AS смена,
+       s.site_raw                 AS объект,
+       s.passengers[1]            AS пассажир_1,
+       s.passengers[2]            AS пассажир_2,
+       s.passengers[3]            AS пассажир_3,
+       s.passengers[4]            AS пассажир_4,
+       cardinality(s.passengers)  AS занято_мест,
+       cardinality(s.passengers) >= 2 AS хватает_для_зачёта,
+       s.telegram_id              AS водитель_tg
+FROM carpool_snapshot s;
+
+-- «С кем ездил этот человек» — вопрос, который задаётся чаще всего.
+CREATE OR REPLACE VIEW v_passenger_rides AS
+SELECT s.snapshot_date AS дата,
+       p               AS пассажир,
+       s.driver_name   AS водитель,
+       s.shift_raw     AS смена,
+       s.site_raw      AS объект,
+       s.telegram_id   AS водитель_tg
+FROM carpool_snapshot s, unnest(s.passengers) p;
+
+-- Нормализованное имя: отсортированные слова в нижнем регистре. Тот же
+-- принцип, что в person.name_key, — иначе «Akmal Shah» и «Shah Akmal»
+-- выглядят как разные люди.
+CREATE OR REPLACE VIEW v_name_key AS
+SELECT s.snapshot_date AS дата, s.driver_name AS водитель, p AS написание,
+       (SELECT string_agg(w, ' ' ORDER BY w)
+        FROM unnest(string_to_array(lower(btrim(p)), ' ')) w WHERE w <> '') AS ключ
+FROM carpool_snapshot s, unnest(s.passengers) p;
+
+-- Один человек у двух водителей в один день.
+CREATE OR REPLACE VIEW v_conflicts AS
+SELECT дата, ключ AS имя_нормализованное,
+       string_agg(DISTINCT написание, ' / ') AS написания,
+       string_agg(DISTINCT водитель, ' | ')  AS водители,
+       count(DISTINCT водитель)              AS сколько_водителей
+FROM v_name_key GROUP BY дата, ключ HAVING count(DISTINCT водитель) > 1;
+
+-- Пассажиры, которых нет в ростере.
+CREATE OR REPLACE VIEW v_unknown_passengers AS
+SELECT n.написание AS имя, count(DISTINCT n.дата) AS дней,
+       min(n.дата) AS с, max(n.дата) AS по
+FROM v_name_key n LEFT JOIN person pe ON pe.name_key = n.ключ
+WHERE pe.id IS NULL GROUP BY n.написание;
+
+-- Правило доплат целиком: водитель отмечен в табеле И не меньше двух
+-- пассажиров. Присутствие пассажиров не учитывается — решение 06.10.
+CREATE OR REPLACE VIEW v_credit_day AS
+SELECT c.ride_date   AS дата,
+       d.full_name   AS водитель,
+       d.current_site_id AS объект,
+       count(*)      AS пассажиров,
+       EXISTS (SELECT 1 FROM presence pr
+               WHERE pr.person_id = c.driver_id AND pr.work_date = c.ride_date)
+                     AS отмечен_в_табеле,
+       count(*) >= 2 AND EXISTS (SELECT 1 FROM presence pr
+               WHERE pr.person_id = c.driver_id AND pr.work_date = c.ride_date)
+                     AS день_засчитан
+FROM carpool c JOIN person d ON d.id = c.driver_id
+GROUP BY c.ride_date, c.driver_id, d.full_name, d.current_site_id;
