@@ -407,3 +407,27 @@ def build_carpool(
             rows.append(CarpoolLink(ride_date, driver_id, pid, seat))
 
     return rows, bad
+
+
+def suspicious_sheets(titles: Iterable[str]) -> list[tuple[str, str]]:
+    """Листы, похожие на табель, но не прошедшие отбор, — с причиной.
+
+    Молчаливый пропуск здесь дорого стоит: если табель за неделю назван
+    непривычно, присутствие за эту неделю просто не появится, и доплаты
+    по ней посчитать будет нечем. Отличить «лист не табель» от «табель,
+    который я не узнал» можно только назвав причину.
+
+    Листы, где нет ни признака объекта, ни диапазона дат, не возвращаются:
+    это заведомо не табели (employees, drivers, Svodka).
+    """
+    out: list[tuple[str, str]] = []
+    for title in titles:
+        if is_timesheet(title):
+            continue
+        site = site_from_sheet_name(title)
+        dates = week_dates_from_name(title)
+        if site is None and dates is None:
+            continue
+        reason = "объект в имени не опознан" if site is None else "не разобран диапазон дат"
+        out.append((title, reason))
+    return out

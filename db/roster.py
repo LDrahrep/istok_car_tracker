@@ -26,6 +26,7 @@ from .importer import (
     build_carpool,
     build_people,
     is_timesheet,
+    suspicious_sheets,
     name_key,
     parse_timesheet,
     resolve_telegram_conflicts,
@@ -126,7 +127,9 @@ def import_roster(sheets, *, drivers_sheet: str,
     if not enabled():
         return {"enabled": False}
 
-    titles = [t for t in sheets.sheet_titles() if is_timesheet(t)]
+    all_titles = sheets.sheet_titles()
+    skipped = suspicious_sheets(all_titles)
+    titles = [t for t in all_titles if is_timesheet(t)]
     if only:
         needle = only.casefold()
         titles = [t for t in titles if needle in t.casefold()]
@@ -255,4 +258,5 @@ def import_roster(sheets, *, drivers_sheet: str,
         "carpool_written": after_carpool - kept_manual,
         "carpool_total": after_carpool,
         "carpool_problems": link_problems,
+        "skipped_sheets": skipped,
     }

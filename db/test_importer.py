@@ -427,3 +427,30 @@ def test_unknown_driver_skips_whole_row():
 def test_empty_passenger_list_is_not_an_error():
     rows, bad = build_carpool([(DAY, 111, "Driver One", [])], KEYS, TGIDS)
     assert rows == [] and not any(bad.values())
+
+
+# ──────────────── диагностика пропущенных листов ────────────────
+
+from importer import suspicious_sheets  # noqa: E402
+
+
+def test_real_timesheets_are_not_reported_as_skipped():
+    assert suspicious_sheets([BUFFALO_SHEET, "8/17/2026-8/23/2026 AMAZON"]) == []
+
+
+def test_plain_sheets_are_not_reported():
+    """employees и Svodka — заведомо не табели, шуметь про них незачем."""
+    assert suspicious_sheets(["employees", "drivers", "Svodka Columbus", "week2"]) == []
+
+
+def test_site_sheet_without_dates_is_flagged():
+    """«PHASE 5 AMAZON»: объект есть, недели нет — присутствие потеряется молча."""
+    (title, reason), = suspicious_sheets(["PHASE 5 AMAZON"])
+    assert title == "PHASE 5 AMAZON"
+    assert "дат" in reason
+
+
+def test_dated_sheet_with_unknown_site_is_flagged():
+    """Новый объект, которого нет в SITE_ALIASES, — самая дорогая потеря."""
+    (title, reason), = suspicious_sheets(["09212026-09272026 NEWSITE"])
+    assert "объект" in reason

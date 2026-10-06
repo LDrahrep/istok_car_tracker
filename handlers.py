@@ -1719,6 +1719,13 @@ class BotHandlers:
             for owner, loser, tg in conflicts[:8]:
                 lines.append(f"  • {tg}: «{owner}» ← оставлен, «{loser}» ← снят")
 
+        # Молчаливо пропущенный табель = неделя без присутствия и без доплат.
+        skipped = info.get("skipped_sheets") or []
+        if skipped:
+            lines.append(f"\n⚠️ Похожи на табель, но пропущены: {len(skipped)}")
+            for title, reason in skipped[:6]:
+                lines.append(f"  • «{title}» — {reason}")
+
         per_sheet = info["per_sheet"]
         if per_sheet and len(per_sheet) <= 12:
             lines.append("\nПо листам (отметок):")
