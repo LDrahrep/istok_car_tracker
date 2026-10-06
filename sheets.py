@@ -1027,7 +1027,7 @@ class SheetManager:
         (…AMAZON, …BUFFALO), а их состав меняется каждую неделю, поэтому
         перечислять их в конфиге нельзя.
         """
-        return [ws.title for ws in self._retry(lambda: self._sheet().worksheets())]
+        return [ws.title for ws in self._retry(lambda: self._open().worksheets())]
 
     def carpool_counts(self) -> dict[int, int]:
         """telegramID -> сколько пассажиров записано.
