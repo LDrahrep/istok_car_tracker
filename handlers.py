@@ -1739,6 +1739,81 @@ class BotHandlers:
         text = "\n".join(lines)
         await self._reply(update, text[:4000], reply_markup=self.kb_main(uid))
 
+    async def db_merge_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Склеить две записи одного человека. /db_merge Старое Имя | Новое Имя
+
+        Разделитель — вертикальная черта: в именах есть пробелы, по ним
+        разбить нельзя.
+        """
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+
+        raw = " ".join(context.args or [])
+        if "|" not in raw:
+            await self._reply(
+                update,
+                "Укажи оба имени через вертикальную черту:\n"
+                "/db_merge Старое Имя | Новое Имя\n\n"
+                "История старой записи перейдёт к новой, старая будет удалена.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        old_name, new_name = (part.strip() for part in raw.split("|", 1))
+
+        from db import roster
+
+        try:
+            info = await asyncio.to_thread(roster.merge_people, old_name, new_name)
+        except Exception as e:
+            logger.exception("merge failed")
+            await self._reply(
+                update, f"❌ Ошибка: {e}", reply_markup=self.kb_main(uid)
+            )
+            return
+
+        if not info.get("ok"):
+            reasons = {
+                "same": "Это одно и то же имя — склеивать нечего.",
+                "empty": "Одно из имён пустое.",
+                "not_found": (
+                    f"Не нашёл записи. Старое «{old_name}»: "
+                    f"{'есть' if info.get('old_found') else 'НЕТ'}, "
+                    f"новое «{new_name}»: "
+                    f"{'есть' if info.get('new_found') else 'НЕТ'}.\n\n"
+                    "Если новой записи нет — сначала запусти /db_import."
+                ),
+            }
+            await self._reply(
+                update,
+                reasons.get(info.get("reason"), "Не удалось склеить."),
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        moved, dropped = info["moved"], info["dropped"]
+        lines = [
+            "✅ Склеено", "",
+            f"«{info['old']}» → «{info['new']}»", "",
+            f"Отметок в табеле: {moved['presence']}",
+            f"Поездок как водитель: {moved['as_driver']}",
+            f"Поездок как пассажир: {moved['as_passenger']}",
+        ]
+        # Не перенеслось то, что нарушило бы ограничение: человек уже отмечен
+        # в этот день или уже едет. Молчать об этом нельзя — это потеря истории.
+        lost = {k: v for k, v in dropped.items() if v}
+        if lost:
+            lines.append("")
+            lines.append("⚠️ Не перенеслось (записи уже были у нового имени):")
+            names = {"presence": "отметок", "as_driver": "поездок водителем",
+                     "as_passenger": "поездок пассажиром"}
+            for key, count in lost.items():
+                lines.append(f"  • {names[key]}: {count}")
+        lines.append("")
+        lines.append("Старая запись удалена.")
+        await self._reply(update, "\n".join(lines), reply_markup=self.kb_main(uid))
+
     async def db_export_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Выгрузка из БД обратно в таблицу. /db_export [лист]
 
