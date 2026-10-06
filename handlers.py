@@ -1697,10 +1697,16 @@ class BotHandlers:
                 items = problems.get(kind) or []
                 if not items:
                     continue
-                lines.append(f"  • {label}: {len(items)}")
-                names = sorted({str(i[1]) for i in items if len(i) > 1})[:5]
+                # Людей, а не строк: «59» читается как 59 разных человек,
+                # хотя за ними стоят трое, ездящие каждый день. Админу важно
+                # именно число людей — это объём ручной работы.
+                names = sorted({str(i[1]) for i in items if len(i) > 1})
+                lines.append(
+                    f"  • {label}: {len(names)} чел. (записей {len(items)})"
+                )
                 if names:
-                    lines.append(f"    {', '.join(names)}")
+                    shown = ", ".join(names[:5])
+                    lines.append(f"    {shown}" + (" …" if len(names) > 5 else ""))
 
         if info["orphans"]:
             lines.append(f"\n⚠️ Строк без человека: {info['orphans']}")
