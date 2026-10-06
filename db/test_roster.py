@@ -64,6 +64,8 @@ class FakeDB:
                 out.append("read_ids")
             elif sql.startswith("DELETE FROM carpool"):
                 out.append("clear_carpool")
+            elif sql.startswith("UPDATE person p SET full_name"):
+                out.append("rename")
         return out
 
 
@@ -72,6 +74,7 @@ class FakeCursor:
         self.db = db
         self._one = None
         self._all = None
+        self.rowcount = 0
 
     def __enter__(self):
         return self
@@ -99,6 +102,10 @@ class FakeCursor:
             for k in [k for k, r in self.db.tables["carpool"].items()
                       if r[-1] == "snapshot"]:
                 del self.db.tables["carpool"][k]
+        elif s.startswith("UPDATE person p SET full_name"):
+            # Переименование по telegram_id. На фейке результат не моделируем —
+            # SQL проверен на живой базе; здесь важен только факт и порядок.
+            self.rowcount = 0
         elif s.startswith("UPDATE person SET telegram_id = NULL"):
             pass
         elif s.startswith("UPDATE capture_run"):
@@ -327,3 +334,16 @@ def test_carpool_rebuild_is_idempotent():
     info_b, db_b, _ = run()
     assert info_a["carpool_total"] == info_b["carpool_total"] == 1
     assert len(db_b.tables["carpool"]) == 1
+
+
+def test_rename_runs_before_releasing_telegram_ids():
+    """Порядок критичен.
+
+    RELEASE_TGIDS снимает telegram_id со всех записей, чьё имя не пришло
+    в этом прогоне. Если он отработает раньше переименования, у старого
+    имени ID уже не будет — и связать переименованного человека с его
+    историей станет нечем.
+    """
+    _, db, _ = run()
+    steps = db.steps()
+    assert steps.index("rename") < steps.index("release")
