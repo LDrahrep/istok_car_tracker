@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
@@ -175,3 +175,19 @@ class DriverPassengers:
             passengers=passengers,
             shift_raw=row.get("Shift") or "",
         )
+
+@dataclass(frozen=True)
+class Reason:
+    """Причина отказа в машинном виде: код локали + подстановки.
+
+    Слой данных не знает ни языка пользователя, ни того, как называется
+    кнопка в его клавиатуре, — поэтому он не должен собирать текст. Раньше
+    собирал: validate_passengers возвращал готовые русские строки, и
+    англоязычный водитель получал ответ вперемешку — часть по-английски
+    из локали, часть по-русски из sheets.py.
+
+    Тот же тип переиспользуется, когда причину сообщает не проверка, а
+    ограничение в схеме: имя ограничения отображается в такой же код.
+    """
+    code: str
+    params: dict = field(default_factory=dict)

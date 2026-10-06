@@ -13,7 +13,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from config import Buttons
 from i18n import t, button, set_user_lang, is_button
 from intent import parse_yes_no_intent
-from models import Driver, DriverPassengers, ShiftType, normalize_text
+from models import Driver, DriverPassengers, Reason, ShiftType, normalize_text
 from persistence import get_state_manager
 
 logger = logging.getLogger(__name__)
@@ -612,6 +612,22 @@ class BotHandlers:
         )
         return ST_ADD_PASSENGERS
 
+    # Коды причин → текст. Подсказка про самостоятельное открепление
+    # прицепляется здесь, а не в локали: ей нужно название кнопки, а оно
+    # зависит от языка читателя — слой данных его не знает.
+    _REASON_HINTS = {"passenger_warning.already_with_driver": "validate.taken_hint"}
+
+    def _render_reasons(self, reasons, uid) -> list[str]:
+        out = []
+        for r in reasons:
+            text = t(r.code, tg_id=uid, **r.params)
+            hint_key = self._REASON_HINTS.get(r.code)
+            if hint_key:
+                text += " " + t(hint_key, tg_id=uid,
+                                button=button("btn.leave_carpool", uid))
+            out.append(text)
+        return out
+
     async def add_passengers_input(self, update, context):
         tg_id = update.effective_user.id
         names = [
@@ -623,9 +639,16 @@ class BotHandlers:
         valid, errors, warnings = self.sheets.validate_passengers(tg_id, names)
 
         if errors:
+            text = "\n\n".join(self._render_reasons(errors, tg_id))
+            # «Никого не удалось добавить» без подробностей бесполезно:
+            # водителю нужно знать, кто именно и почему не прошёл.
+            if warnings and any(r.code == "validate.nobody_added" for r in errors):
+                text += "\n\n" + t(
+                    "validate.nobody_added_details", tg_id=tg_id,
+                    details="\n".join(self._render_reasons(warnings, tg_id)),
+                )
             await self._reply(
-                update,
-                "\n\n".join(errors),
+                update, text,
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return ConversationHandler.END
@@ -634,7 +657,7 @@ class BotHandlers:
         if not valid:
             parts = [t("passengers.nothing_added", tg_id=tg_id)]
             if warnings:
-                parts.append("\n".join(f"• {w}" for w in warnings))
+                parts.append("\n".join(self._render_reasons(warnings, tg_id)))
             await self._reply(
                 update,
                 "\n\n".join(parts),
@@ -660,7 +683,7 @@ class BotHandlers:
             overflow = [n for n in merged[4:] if n in new_names]
             merged = merged[:4]
             for name in overflow:
-                warnings.append(t("passengers.max_reached", tg_id=tg_id, name=name))
+                warnings.append(Reason("passengers.max_reached", {"name": name}))
 
         dp = DriverPassengers(
             driver_name=driver.name,
@@ -731,7 +754,7 @@ class BotHandlers:
 
         if warnings:
             parts.append(t("passengers.skipped", tg_id=tg_id,
-                           names="\n".join(f"• {w}" for w in warnings)))
+                           names="\n".join(self._render_reasons(warnings, tg_id))))
 
         await self._reply(
             update,
@@ -1591,6 +1614,112 @@ class BotHandlers:
             lambda: __import__("db.store", fromlist=["store"]).backfill(self.sheets, sheet),
             f"перенос {sheet}",
         )
+
+    async def db_import_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Импорт ростера и присутствия из табелей. /db_import [подстрока]
+
+        Без аргумента читает ВСЕ листы-табели, а это по одному запросу к Google
+        на лист. Квота около 60 запросов в минуту почти выбирается еженедельной
+        рассылкой, поэтому полный прогон — в спокойное время, а точечный через
+        аргумент: /db_import BUFFALO.
+        """
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+
+        args = context.args or []
+        only = args[0].strip() if args else None
+        label = f"импорт «{only}»" if only else "импорт всех табелей"
+        await self._reply(update, f"⏳ {label}… при полном прогоне это минута-две.")
+
+        from db import roster
+
+        try:
+            info = await asyncio.to_thread(
+                roster.import_roster, self.sheets,
+                drivers_sheet=self.config.DRIVERS_SHEET,
+                only=only,
+            )
+        except Exception as e:
+            logger.exception("import failed")
+            await self._reply(
+                update, f"❌ Ошибка: {e}", reply_markup=self.kb_main(uid)
+            )
+            return
+
+        if not info.get("enabled"):
+            await self._reply(
+                update,
+                "⚪️ БД выключена: переменная DATABASE_URL не задана.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        if not info["sheets"]:
+            await self._reply(
+                update,
+                "Ни один лист не опознан как табель.\n"
+                "Табель = объект в конце имени и разбираемый диапазон дат.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        lines = [
+            f"✅ {label} — готово",
+            "",
+            f"Табелей прочитано: {info['sheets']}",
+            f"Объектов: {info['sites_total']} (+{info['sites_new']})",
+            f"Людей: {info['people_total']} (+{info['people_new']}), "
+            f"в прогоне {info['people_seen']}",
+            f"Присутствие: {info['presence_total']} (+{info['presence_new']}) "
+            f"из {info['presence_read']} прочитанных",
+            f"Связей водитель↔пассажир: {info['carpool_total']} "
+            f"(собрано {info['carpool_built']})",
+        ]
+
+        # Несвязанное важнее собранного: это имена, которые надо починить
+        # в источнике, иначе человек не попадёт в расчёт.
+        problems = info["carpool_problems"]
+        labels = {
+            "passenger": "пассажир не найден в ростере",
+            "driver": "водитель не найден в ростере",
+            "self": "водитель записан сам себе в пассажиры",
+            "taken": "пассажир уже у другого водителя в тот же день",
+        }
+        if any(problems.values()):
+            lines.append("\n⚠️ Не связалось:")
+            for kind, label in labels.items():
+                items = problems.get(kind) or []
+                if not items:
+                    continue
+                lines.append(f"  • {label}: {len(items)}")
+                names = sorted({str(i[1]) for i in items if len(i) > 1})[:5]
+                if names:
+                    lines.append(f"    {', '.join(names)}")
+
+        if info["orphans"]:
+            lines.append(f"\n⚠️ Строк без человека: {info['orphans']}")
+
+        # Конфликт telegram_id почти всегда означает переименование с
+        # оставшейся старой строкой в drivers — это надо починить в источнике.
+        conflicts = info["tg_conflicts"]
+        if conflicts:
+            lines.append(f"\n⚠️ Один telegram_id на двух людей: {len(conflicts)}")
+            for owner, loser, tg in conflicts[:8]:
+                lines.append(f"  • {tg}: «{owner}» ← оставлен, «{loser}» ← снят")
+
+        per_sheet = info["per_sheet"]
+        if per_sheet and len(per_sheet) <= 12:
+            lines.append("\nПо листам (отметок):")
+            for title, count in sorted(per_sheet.items()):
+                lines.append(f"  {title}: {count}")
+
+        lines.append(
+            "\nℹ️ Бот из этих таблиц пока не читает — на работу людей импорт "
+            "не влияет. Смотреть и править можно в админке."
+        )
+        text = "\n".join(lines)
+        await self._reply(update, text[:4000], reply_markup=self.kb_main(uid))
 
     async def _run_capture(self, update, uid, work, label: str):
         """Общая обвязка для команд захвата: прогресс, запуск, отчёт."""

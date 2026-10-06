@@ -1,3 +1,5 @@
+from locales.contacts import ADMIN_CONTACT as _ADMIN
+
 STRINGS = {
     # ===== Карточка водителя, телефон, смены =====
     'btn.skip': '⏭ Skip',
@@ -10,15 +12,12 @@ STRINGS = {
     'shift.meltech_night': '🔧🌙 Meltech night',
     'card.seats_free': '{free} of {total} seats free',
     'card.seats_full': 'car is full',
-    'card.no_contact': 'no contact — ask the administrator',
-
+    'card.no_contact': f'no contact — ask {_ADMIN}',
     # ===== Роли, помощь, открепление =====
-    'leave.error': "❌ Couldn't detach you. Try again or contact your administrator.",
-    'btn.leave_carpool': '🚶 I no longer ride with my driver',
+    'leave.error': f"❌ Couldn't detach you. Try again or message {_ADMIN}.",    'btn.leave_carpool': '🚶 I no longer ride with my driver',
     'btn.help': '❓ Help',
     'leave.ask_name': "Type your first and last name — I'll find who you're assigned to.\n\nExample: Ivan Ivanov",
-    'leave.not_employee': "I couldn't find that employee in the list.\n\nCheck the spelling or contact your administrator.",
-    'leave.not_in_carpool': "You're not assigned to any driver — nothing to detach.\n\nIf someone should be driving you, ask them to add you through the bot.",
+    'leave.not_employee': f"I couldn't find that employee in the list.\n\nCheck the spelling or message {_ADMIN}.",    'leave.not_in_carpool': "You're not assigned to any driver — nothing to detach.\n\nIf someone should be driving you, ask them to add you through the bot.",
     'leave.confirm': 'You currently ride with {driver}.\n\nDetach from them?',
     'leave.done': "Done — you're no longer assigned to {driver}.\n\nAny other driver can now add you to their car.",
     'leave.cancelled': 'Nothing changed — you still ride with {driver}.',
@@ -27,8 +26,7 @@ STRINGS = {
     'help.header': '❓ How to use this bot',
     'help.driver': 'You are registered as a driver.\n\n👥 Add passengers — list the people you drive. Up to 4, one per line.\n🧑\u200d🤝\u200d🧑 Remove passenger — take one off the list.\n📋 My record — your details and current list.\n🔍 Find a driver — fellow drivers in your city.\n🛑 Stop being a driver — if you no longer drive.\n\n⏰ Once a week I\'ll ask whether your list is still correct. Answer "Yes" or "No" — this matters: with no answer the list is cleared automatically after 2 hours.\n\n💰 A day counts if you were marked present on the timesheet and have at least two passengers listed.',
     'help.passenger': 'You\'re using the bot as a passenger.\n\n🚗 Become a driver — if you drive colleagues in your own car.\n🔍 Find a driver — see who drives from your city.\n📋 My record — whether you\'re assigned to anyone.\n🚶 I no longer ride with my driver — detach so another driver can pick you up.\n\nTo get a ride, ask a driver to add you — they do it with the "Add passengers" button.',
-    'help.footer': 'Language: /russian · /english\nSomething not working — message your administrator.',
-    'start.greeting': 'Hi! I keep track of drivers and passengers.\n\n{role_hint}\n\nPick an action with the buttons below, and tap "❓ Help" if anything is unclear.',
+    'help.footer': f'Language: /russian · /english\nSomething not working — message {_ADMIN}',    'start.greeting': 'Hi! I keep track of drivers and passengers.\n\n{role_hint}\n\nPick an action with the buttons below, and tap "❓ Help" if anything is unclear.',
     'start.role_driver': 'You are registered as a driver.',
     'start.role_passenger': 'You\'re not a driver yet. If you drive colleagues, tap "🚗 Become a driver".',
 
@@ -39,8 +37,7 @@ STRINGS = {
     "btn.by_city": "🏙 By city",
     "btn.by_state": "🗺 By state",
     "search.ask_name": "What's your name? Type first and last name — I'll check the employee list.\nExample: Ivan Ivanov",
-    "search.not_employee": "You're not in the employee list — search is for employees only. Contact the admin.",
-    "search.choose_mode": "Search drivers by city or by state?",
+    "search.not_employee": f"You're not in the employee list — search is for employees only. Message {_ADMIN}.",    "search.choose_mode": "Search drivers by city or by state?",
     "search.ask_city": "Type a city (state optional), e.g. San Jose or San Jose, CA",
     "search.ask_state": "Type a state (2 letters), e.g. CA",
     "search.city_not_found": "City not found in the list. Try again (e.g. San Jose).",
@@ -76,11 +73,9 @@ STRINGS = {
     "driver.already_passenger": "⛔ You are already registered as a passenger of driver {driver}.\nAsk them to remove you from the list, then come back.",
     "driver.name_not_in_employees": "Employee not found 😕\nCheck how the first and last name are spelled.\nExample: Ivan Ivanov",
     "driver.name_suggestions": "Employee not found 😕\nDid you mean:\n{suggestions}\n\nTry again.",
-    "driver.shift_unknown": "⛔ Your shift is not specified.\nContact the administrator.",
-    "driver.registered": "✅ Done! You're registered as a driver.\nYou can now add passengers.",
+    "driver.shift_unknown": f"⛔ Your shift is not specified.\nMessage {_ADMIN}.",    "driver.registered": "✅ Done! You're registered as a driver.\nYou can now add passengers.",
     "driver.register_error": "❌ Couldn't save it. Try again.",
-    "driver.name_taken_by_other": "⛔ Another driver is already registered under this name.\nIf that's a mistake, contact the administrator.",
-    "driver.saved": "✅ Driver record saved. City: {city}, {state}. {note}\nNow you can add passengers with the \"{button}\" button.",
+    "driver.name_taken_by_other": f"⛔ Another driver is already registered under this name.\nIf that's a mistake, message {_ADMIN}.",    "driver.saved": "✅ Driver record saved. City: {city}, {state}. {note}\nNow you can add passengers with the \"{button}\" button.",
 
     # ===== Stop being driver =====
     "stop_driver.confirm": "Are you sure you want to stop being a driver?\n\nI'll delete your driver record and detach your passengers.",
@@ -99,7 +94,7 @@ STRINGS = {
     "passengers.shift_cleanup": "⚠️ Passengers removed because of a Shift change:\n{names}",
     "passengers.auto_unlink_notice": "ℹ️ {name} left your carpool — they drive their own passengers now.\nThe list is updated.",
     "passengers.nothing_added": "ℹ️ Couldn't add anyone.",
-    "passengers.max_reached": "{name}: doesn't fit (4 passengers max).",
+    "passengers.max_reached": "• {name}: doesn't fit (4 passengers max).",
     "passengers.error": "❌ Something went wrong while saving. Try again.",
 
     # Passenger-specific warnings
@@ -108,6 +103,13 @@ STRINGS = {
     "passenger_warning.wrong_shift": "• {name}: employee is on a different shift.",
     "passenger_warning.already_with_driver": "• {name}: already rides with driver {driver}.",
     "passenger_warning.self": "🙃 A driver cannot be their own passenger — this entry was skipped.\nIf you're no longer a driver, press \"🛑 Stop being a driver\", then someone can add you as a passenger.",
+    "validate.not_a_driver": "⛔ You're not registered as a driver.",
+    "validate.all_already_yours": "ℹ️ All listed passengers are already assigned to you:\n{names}",
+    "validate.nobody_added": "❌ Couldn't add anyone.\n\nPossible reasons:\n• the employee hasn't been added yet\n• the employee is on a different shift\n• the employee already rides with another driver",
+    "validate.nobody_added_details": "What exactly didn't fit:\n{details}",
+    "passenger_warning.already_yours": "• {name}: already assigned to you.",
+    "passenger_warning.is_active_driver": "• {name}: is driving others right now — can't be added.",
+    "passenger_warning.too_many": "• Maximum 4 passengers — the rest are ignored.",
 
     # ===== Remove passenger =====
     "remove_passenger.choose": "Pick the passenger to remove (use the buttons below):",
@@ -131,8 +133,7 @@ STRINGS = {
     "weekly.yes_answer": "Ok, list kept as is.",
     "weekly.no_answer": "List cleared.",
     "weekly.unclear": "🤔 Couldn't understand. If the list is correct — tap \"✅ Yes\" or type \"Yes\". If you want to clear it — tap \"❌ No\" or type \"No\".",
-    "weekly.error": "❌ Error while clearing. Contact the administrator.",
-    "weekly.expired_deleted": "⏰ You didn't respond to the weekly check within 2 hours.\nYour record has been deleted. To restore — press \"🚗 Become a driver\".",
+    "weekly.error": f"❌ Error while clearing. Message {_ADMIN}.",    "weekly.expired_deleted": "⏰ You didn't respond to the weekly check within 2 hours.\nYour record has been deleted. To restore — press \"🚗 Become a driver\".",
     "weekly.expired_cleared": "⏰ You didn't respond to the weekly check within 2 hours.\nYour passenger list was cleared. Your driver record is kept — add current passengers via \"👥 Add passengers\".",
 
     # ===== Admin =====
@@ -165,6 +166,4 @@ STRINGS = {
 
     # ===== Generic =====
     "generic.use_buttons": "Use the buttons below.",
-    "generic.contact_admin": "Contact the administrator.",
-    "generic.error": "Something went wrong. Contact the administrator.",
-}
+    "generic.contact_admin": f"Message {_ADMIN}.",    "generic.error": f"Something went wrong. Message {_ADMIN}.",}

@@ -7,7 +7,7 @@ from pathlib import Path
 from locales import en, ru
 
 ROOT = Path(__file__).parent
-SOURCES = ["handlers.py", "bot.py", "weekly.py", "report.py", "i18n.py"]
+SOURCES = ["handlers.py", "bot.py", "weekly.py", "report.py", "i18n.py", "sheets.py"]
 
 # Ключи, собираемые динамически (t(key) с переменной) — проверить статикой
 # нельзя, перечисляем явно.
@@ -16,8 +16,13 @@ DYNAMIC_OK = {"help.driver", "help.passenger",
 
 
 def _used_keys() -> set[str]:
-    """Все литеральные ключи из вызовов t(...) и button(...)."""
-    pattern = re.compile(r'\b(?:t|button)\(\s*["\']([a-z_]+\.[a-z_0-9]+)["\']')
+    """Все литеральные ключи из t(...), button(...) и Reason(...).
+
+    Reason обязательно: его код — такой же ключ локали, но опечатка в нём
+    не видна ниоткуда. Пользователь получит в чат «[passenger_warning.typo]».
+    """
+    pattern = re.compile(
+        r'\b(?:t|button|Reason)\(\s*["\']([a-z_]+\.[a-z_0-9]+)["\']')
     keys: set[str] = set()
     for name in SOURCES:
         keys |= set(pattern.findall((ROOT / name).read_text(encoding="utf-8")))
@@ -200,3 +205,114 @@ def test_no_duplicate_keys_in_locales():
             dupes = [k for k, c in collections.Counter(keys).items() if c > 1]
             assert not dupes, f"{name}: ключ объявлен дважды: {dupes}"
             break
+
+
+# ───────────────────────── контакт администратора ─────────────────────────
+
+# Говорит об администраторах как о группе («команда только для админов»),
+# а не отправляет пользователя к конкретному человеку.
+ADMIN_GROUP_KEYS = {"admin.not_authorized"}
+
+
+def test_admin_handle_lives_in_one_place():
+    """Хэндл не должен быть вписан литералом в локаль.
+
+    Он встречается в десяти репликах каждого локаля. Литералом это двадцать
+    правок при смене администратора — и одна забытая, которая будет годами
+    отправлять людей не туда. Единственное место — locales/contacts.py.
+    """
+    from locales.contacts import ADMIN_CONTACT
+
+    for name in ("locales/ru.py", "locales/en.py"):
+        src = (ROOT / name).read_text(encoding="utf-8")
+        assert ADMIN_CONTACT not in src, (
+            f"{name}: хэндл вписан литералом — подставляй {{_ADMIN}}"
+        )
+
+
+def test_no_faceless_admin_references():
+    """«Обратись к администратору» без имени — тупик для пользователя.
+
+    Человек получает ошибку и не знает, кому писать. Если реплика отправляет
+    к администратору, в ней должен стоять его хэндл.
+    """
+    import re as _re
+
+    pattern = _re.compile(r"администратор|administrator|the admin\b", _re.I)
+    for loc_name, loc in (("ru", ru), ("en", en)):
+        bad = [k for k, v in loc.STRINGS.items()
+               if k not in ADMIN_GROUP_KEYS and pattern.search(v)]
+        assert not bad, f"{loc_name}: отправляют к администратору без хэндла: {bad}"
+
+
+def test_admin_contact_is_substituted_not_left_as_placeholder():
+    """Ловит f-строку, которую забыли пометить префиксом f.
+
+    Без префикса в чат уедет буквальное '{_ADMIN}'. Для пользователя это
+    выглядит как сломанный бот, а тест симметрии локалей такое пропускает:
+    скобки-то есть в обеих локалях одинаково.
+    """
+    from locales.contacts import ADMIN_CONTACT
+
+    for loc_name, loc in (("ru", ru), ("en", en)):
+        leaked = [k for k, v in loc.STRINGS.items() if "_ADMIN" in v]
+        assert not leaked, f"{loc_name}: подстановка не выполнилась: {leaked}"
+        assert any(ADMIN_CONTACT in v for v in loc.STRINGS.values()), (
+            f"{loc_name}: хэндл не попал ни в одну реплику"
+        )
+
+
+# ───────────────────────── сборка текста из причин ─────────────────────────
+
+def _render(reasons, lang):
+    """Рендер причин глазами пользователя с заданным языком."""
+    import i18n
+    from handlers import BotHandlers
+
+    original = i18n.get_user_lang
+    i18n.get_user_lang = lambda tg_id, state_file="bot_state.json": lang
+    try:
+        return BotHandlers.__new__(BotHandlers)._render_reasons(reasons, 1)
+    finally:
+        i18n.get_user_lang = original
+
+
+def test_reason_renders_in_the_readers_language():
+    """Ровно то, что чинили: ответ не должен быть на двух языках сразу."""
+    from models import Reason
+
+    line, = _render([Reason("passenger_warning.wrong_shift", {"name": "Ivan"})], "en")
+    assert "Ivan" in line
+    assert not re.search(r"[а-яё]", line, re.I), f"русский в английском ответе: {line}"
+
+
+def test_same_reason_in_russian():
+    from models import Reason
+
+    line, = _render([Reason("passenger_warning.wrong_shift", {"name": "Иван"})], "ru")
+    assert "другой смене" in line
+
+
+def test_detach_hint_uses_the_button_name_of_that_language():
+    """Подсказка называет кнопку — значит её нельзя зашить в локаль отдельно.
+
+    Водитель-англичанин должен прочитать английское название кнопки,
+    иначе инструкция «нажми X» указывает на несуществующий пункт меню.
+    """
+    from models import Reason
+
+    r = Reason("passenger_warning.already_with_driver",
+               {"name": "Ivan", "driver": "Petr"})
+    en_line, = _render([r], "en")
+    ru_line, = _render([r], "ru")
+
+    assert en.STRINGS["btn.leave_carpool"] in en_line
+    assert ru.STRINGS["btn.leave_carpool"] in ru_line
+    assert "Petr" in en_line, "имя чужого водителя должно остаться"
+
+
+def test_reason_without_params_renders():
+    from models import Reason
+
+    line, = _render([Reason("passenger_warning.too_many")], "en")
+    assert line == en.STRINGS["passenger_warning.too_many"]

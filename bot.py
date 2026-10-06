@@ -306,6 +306,7 @@ def build_app():
     app.add_handler(CommandHandler("db_status", handlers.db_status_command))
     app.add_handler(CommandHandler("db_capture", handlers.db_capture_command))
     app.add_handler(CommandHandler("db_backfill", handlers.db_backfill_command))
+    app.add_handler(CommandHandler("db_import", handlers.db_import_command))
     app.add_handler(CommandHandler("english", handlers.set_language_english))
     app.add_handler(CommandHandler("russian", handlers.set_language_russian))
 

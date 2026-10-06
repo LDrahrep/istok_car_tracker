@@ -119,3 +119,35 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 CREATE INDEX IF NOT EXISTS audit_log_time_idx ON audit_log (happened_at DESC);
+
+-- Связь «кто кого вёз». Отсутствие этой таблицы было дырой: в сыром слое
+-- пассажир — строка в массиве, ни с чем не связанная, поэтому любой вопрос
+-- «а был ли он в тот день на объекте» требовал заново сопоставлять имена
+-- нечётко. Ровно на этом проект уже обжёгся: Дайс 0.824 при пороге 0.82
+-- склеил двух разных людей. Здесь пассажир — ссылка на person, и
+-- сопоставление делается один раз, при импорте.
+--
+-- Два правила карпула жили только в Python (sheets.find_driver_for_passenger
+-- и handlers.MAX_PASSENGERS). Здесь они становятся ограничениями, которые
+-- нельзя обойти ни ботом, ни правкой в админке, ни кривым импортом.
+CREATE TABLE IF NOT EXISTS carpool (
+    ride_date    date     NOT NULL,
+    driver_id    bigint   NOT NULL REFERENCES person(id) ON DELETE CASCADE,
+    passenger_id bigint   NOT NULL REFERENCES person(id) ON DELETE CASCADE,
+    -- Номера мест не выдумка: в листе это колонки Passenger1..4.
+    seat         smallint NOT NULL CHECK (seat BETWEEN 1 AND 4),
+    source       text     NOT NULL,   -- 'snapshot' | 'bot' | 'admin'
+    created_at   timestamptz NOT NULL DEFAULT now(),
+
+    -- Ключ БЕЗ водителя: у пассажира на дату может быть только одна строка,
+    -- то есть только один водитель. Это и есть правило «уже записан
+    -- к другому водителю», но теперь его невозможно нарушить.
+    CONSTRAINT carpool_pk PRIMARY KEY (ride_date, passenger_id),
+    -- Вместимость как уникальность: пятому пассажиру некуда сесть,
+    -- все четыре номера заняты. Без триггеров и счётчиков.
+    CONSTRAINT carpool_seat_uniq UNIQUE (ride_date, driver_id, seat),
+    CONSTRAINT carpool_not_self CHECK (driver_id <> passenger_id)
+);
+
+CREATE INDEX IF NOT EXISTS carpool_driver_date_idx ON carpool (driver_id, ride_date);
+CREATE INDEX IF NOT EXISTS carpool_date_idx ON carpool (ride_date);

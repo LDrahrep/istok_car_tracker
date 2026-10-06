@@ -9,7 +9,9 @@ import difflib
 from gspread.exceptions import APIError
 from google.oauth2.service_account import Credentials
 
+
 from models import (
+    Reason,
     Driver,
     DriverPassengers,
     Employee,
@@ -633,7 +635,7 @@ class SheetManager:
 
     def validate_passengers(
         self, driver_tgid: int, names: list[str]
-    ) -> tuple[list[Employee], list[str], list[str]]:
+    ) -> tuple[list[Employee], list[Reason], list[Reason]]:
         """Валидация пассажиров.
 
         ВАЖНО: в employees.telegramID хранится ID ВОДИТЕЛЯ (не сотрудника).
@@ -647,15 +649,15 @@ class SheetManager:
         4. Если telegramID = ID этого водителя → уже приписан к тебе
         5. Если занят другим водителем → ошибка
         """
-        errors: list[str] = []
-        warnings: list[str] = []
+        errors: list[Reason] = []
+        warnings: list[Reason] = []
         valid: list[Employee] = []
         already_assigned: list[str] = []
 
         # Смену водителя берём из таблицы drivers (там Shift точно его)
         driver_record = self.get_driver(driver_tgid)
         if not driver_record:
-            errors.append("⛔ Ты не зарегистрирован как водитель.")
+            errors.append(Reason("validate.not_a_driver"))
             return [], errors, warnings
 
         driver_shift = ShiftType.from_string(driver_record.shift)
@@ -670,10 +672,7 @@ class SheetManager:
                 driver_shift = ShiftType.from_string(emp_driver.shift)
 
         if driver_shift == ShiftType.UNKNOWN:
-            errors.append(
-                "⛔ У тебя не указана смена.\n"
-                "Обратись к администратору."
-            )
+            errors.append(Reason("driver.shift_unknown"))
             return [], errors, warnings
 
         all_employees = [e for e in self.get_all_employees() if e.name]
@@ -737,27 +736,27 @@ class SheetManager:
                     cutoff=0.68,
                 )
                 if suggestions:
-                    warnings.append(
-                        f"• {raw}: сотрудника еще не добавили. Возможно, ты имел в виду: "
-                        + ", ".join(suggestions)
-                    )
+                    warnings.append(Reason(
+                        "passenger_warning.not_found_suggest",
+                        {"name": raw, "suggestions": ", ".join(suggestions)},
+                    ))
                 else:
-                    warnings.append(f"• {raw}: сотрудника еще не добавили.")
+                    warnings.append(
+                        Reason("passenger_warning.not_found", {"name": raw})
+                    )
                 continue
 
             # Водитель не может быть пассажиром (сравниваем по имени)
             if n == driver_name_norm:
-                warnings.append(
-                    "🙃 Водитель не может быть пассажиром — этот пункт пропущен.\n"
-                    "Если ты больше не водитель, нажми «🛑 Перестать быть водителем», "
-                    "и тогда тебя смогут добавить пассажиром."
-                )
+                warnings.append(Reason("passenger_warning.self"))
                 continue
 
             # Проверка смены
             p_shift = ShiftType.from_string(emp.shift)
             if p_shift != driver_shift:
-                warnings.append(f"• {emp.name}: сотрудник в другой смене.")
+                warnings.append(
+                    Reason("passenger_warning.wrong_shift", {"name": emp.name})
+                )
                 continue
 
             # --- Двойная роль ---
@@ -785,17 +784,17 @@ class SheetManager:
                 if is_mine:
                     already_assigned.append(emp.name)
                 else:
-                    warnings.append(
-                        f"• {emp.name}: уже записан к другому водителю ({rides_with})."
-                        ' Он может открепиться сам — кнопка «🚶 Я больше не еду с водителем» в боте.'
-                    )
+                    warnings.append(Reason(
+                        "passenger_warning.already_with_driver",
+                        {"name": emp.name, "driver": rides_with},
+                    ))
                 continue
 
             # X свободен или сам себе водитель. Если это активный водитель со своими
             # пассажирами — брать пассажиром нельзя.
             if x_is_driver and self.driver_own_passenger_count(emp.name) >= 1:
                 warnings.append(
-                    f"• {emp.name}: сейчас сам возит пассажиров — его нельзя добавить."
+                    Reason("passenger_warning.is_active_driver", {"name": emp.name})
                 )
                 continue
 
@@ -807,43 +806,36 @@ class SheetManager:
                     already_assigned.append(emp.name)
                     continue
                 if normalize_text(other_name) != normalize_text(emp.name):
-                    warnings.append(
-                        f"• {emp.name}: уже записан к другому водителю ({other_name})."
-                        ' Он может открепиться сам — кнопка «🚶 Я больше не еду с водителем» в боте.'
-                    )
+                    warnings.append(Reason(
+                        "passenger_warning.already_with_driver",
+                        {"name": emp.name, "driver": other_name},
+                    ))
                     continue
 
             valid.append(emp)
 
         if len(valid) > 4:
-            warnings.append("• Максимум 4 пассажира — лишние будут проигнорированы.")
+            warnings.append(Reason("passenger_warning.too_many"))
             valid = valid[:4]
 
         # Все пассажиры уже приписаны к этому водителю
         if not valid and already_assigned and not warnings:
-            errors.append(
-                "ℹ️ Все указанные пассажиры уже приписаны к тебе:\n"
-                + "\n".join(f"• {name}" for name in already_assigned)
-            )
+            errors.append(Reason("validate.all_already_yours", {
+                "names": "\n".join(f"• {name}" for name in already_assigned),
+            }))
             return [], errors, []
 
         # Часть приписана, часть новая
         if already_assigned:
             for name in already_assigned:
-                warnings.append(f"• {name}: уже приписан к тебе.")
+                warnings.append(
+                    Reason("passenger_warning.already_yours", {"name": name})
+                )
 
         if not valid and not already_assigned:
-            msg = (
-                "❌ Никого не удалось добавить.\n\n"
-                "Возможные причины:\n"
-                "• сотрудника еще не добавили\n"
-                "• сотрудник в другой смене\n"
-                "• сотрудник уже записан к другому водителю\n"
-                "  (он может открепиться сам кнопкой «🚶 Я больше не еду с водителем»)\n\n"
-            )
-            if warnings:
-                msg += "Что именно не подошло:\n" + "\n".join(warnings)
-            errors.append(msg)
+            # Подробности лежат в warnings — собрать их вместе с этим
+            # сообщением обязан слой, который знает язык пользователя.
+            errors.append(Reason("validate.nobody_added"))
 
 
         return valid, errors, warnings
