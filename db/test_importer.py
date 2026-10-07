@@ -503,3 +503,62 @@ def test_contractor_sheets_become_timesheets():
     for title in ("Tulane 9/28/2026-10/4/2026", "buffalo 9/28/2026-10/4/2026",
                   "Fluidstack TX 10/05/2026-10/11/2026"):
         assert is_timesheet(title, EXTRA_SITES), title
+
+
+# ──────────── геометрия табеля определяется, а не предполагается ────────────
+
+from importer import header_geometry  # noqa: E402
+
+# Реальная раскладка листа «09/28/2026-10/03/2026 COLUMBUS»: имена в D, даты с E.
+SHIFTED_HEADER = ["", "", "", "", "09/28/2026", "09/29/2026", "09/30/2026",
+                  "10/01/2026", "10/02/2026", "10/03/2026", "10/04/2026", "", ""]
+SHIFTED_WEEKDAYS = ["", "", "", "", "Monday", "Tuesday", "Wednesday", "Thursday",
+                    "Friday", "Saturday", "Sunday", "Total hours", "Days worked"]
+SHIFTED_SHEET = "09/28/2026-10/03/2026 COLUMBUS"
+
+
+def test_geometry_found_in_a_shifted_sheet():
+    first, dates = header_geometry(SHIFTED_HEADER)
+    assert first == 4
+    assert len(dates) == 7 and dates[0] == date(2026, 9, 28)
+
+
+def test_totals_columns_end_the_date_run():
+    """«Total hours» не должен попасть в дни."""
+    _, dates = header_geometry(
+        ["", "", "09/14/2026", "09/15/2026", "Total hours", "09/16/2026"])
+    assert len(dates) == 2
+
+
+def test_shifted_sheet_is_parsed_not_silently_skipped():
+    """Регрессия: имя бралось жёстко из колонки B.
+
+    В этом листе B пустая, поэтому каждая строка отбрасывалась как
+    безымянная — лист давал НОЛЬ отметок и не выдавал при этом ни одной
+    ошибки. 154 реальные записи присутствия исчезали бесследно.
+    """
+    values = [SHIFTED_HEADER, SHIFTED_WEEKDAYS,
+              ["", "", "1", "Nikolai Erdniev", "11", "11", "", "", "", "", ""],
+              ["", "", "2", "Alina Shaldyrmova", "11", "", "", "", "", "", ""]]
+    rows = parse_timesheet(values, SHIFTED_SHEET)
+
+    assert len(rows) == 3
+    assert {r.name for r in rows} == {"Nikolai Erdniev", "Alina Shaldyrmova"}
+    assert {r.site_id for r in rows} == {"COLUMBUS"}
+    assert min(r.work_date for r in rows) == date(2026, 9, 28)
+
+
+def test_old_layout_still_parsed_identically():
+    """Обычный табель не должен измениться ни на строку."""
+    values = [HEADER, WEEKDAYS,
+              ["1", "Badma Matsakov", "", "8.0", "10.0", "", "", "", ""]]
+    rows = parse_timesheet(values, BUFFALO_SHEET)
+    assert len(rows) == 2
+    assert rows[0].name == "Badma Matsakov"
+
+
+def test_totals_row_without_a_name_is_skipped():
+    """Последняя строка листа — итоги: часы есть, имени нет."""
+    values = [SHIFTED_HEADER, SHIFTED_WEEKDAYS,
+              ["", "", "", "", "20", "20", "20", "20", "20", "20", "20"]]
+    assert parse_timesheet(values, SHIFTED_SHEET) == []

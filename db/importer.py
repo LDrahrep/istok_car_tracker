@@ -207,34 +207,71 @@ def _as_date(value) -> Optional[date]:
     return None
 
 
+def header_geometry(header: Sequence[object]) -> tuple[Optional[int], list[date]]:
+    """С какой колонки идут даты и сколько их.
+
+    Геометрию нельзя предполагать. В основной таблице имена в колонке B,
+    даты с C; в листе «09/28/2026-10/03/2026 COLUMBUS» имена в D, даты с E,
+    и дней шесть, а не семь. При жёстком расчёте имя читалось бы из пустой
+    колонки, и весь лист пропускался бы молча — без единой ошибки в отчёте.
+
+    Ряд дат считается законченным на первой непустой ячейке, которая датой
+    не является: дальше идут «Total hours» и прочие итоги.
+    """
+    first: Optional[int] = None
+    dates: list[date] = []
+    for i, cell in enumerate(header):
+        parsed = _as_date(cell)
+        if parsed is not None:
+            if first is None:
+                first = i
+            dates.append(parsed)
+        elif first is not None and str(cell or "").strip():
+            break
+    return first, dates
+
+
 def parse_timesheet(values: Sequence[Sequence[object]], sheet_name: str,
                     aliases: Optional[dict[str, str]] = None) -> list[PresenceRow]:
     """Табель → список фактов присутствия.
 
-    Геометрия жёсткая и такая же, как в GAS: даты — строка 1, колонки C..I;
-    имена — колонка B; данные начинаются со строки 3; присутствием считается
-    любая непустая ячейка (часы, крестик, инициалы — значение не разбирается).
+    Геометрия берётся из шапки: где начинаются даты, там и колонки дней,
+    а имя — в колонке слева от них. Это верно для обоих встреченных
+    раскладок и не ломается от вставленной колонки.
+
+    Сами ДАТЫ предпочитаются из имени листа: шапки копируют с чужой недели,
+    и тогда они врут. Из шапки берётся только количество дней — лист может
+    быть и шестидневным.
+
+    Присутствием считается любая непустая ячейка: часы, крестик, инициалы —
+    значение не разбирается.
     """
     site = site_from_sheet_name(sheet_name, aliases)
     if not site or len(values) < 3:
         return []
 
-    dates = week_dates_from_name(sheet_name)
-    if dates is None:
-        header = values[0]
-        dates = [_as_date(header[2 + i]) if 2 + i < len(header) else None
-                 for i in range(7)]
+    first_col, header_dates = header_geometry(values[0])
+    if first_col is None:
+        # Шапка без дат — старая раскладка: имена в B, дни с C.
+        first_col, span = 2, 7
+    else:
+        span = min(len(header_dates), 7)
+    name_col = max(first_col - 1, 0)
+
+    from_name = week_dates_from_name(sheet_name)
+    dates = (from_name[:span] if from_name else header_dates[:span])
     if not any(dates):
         return []
 
     out: list[PresenceRow] = []
     for row in values[2:]:
-        name = str(row[1]).strip() if len(row) > 1 and row[1] is not None else ""
+        name = (str(row[name_col]).strip()
+                if len(row) > name_col and row[name_col] is not None else "")
         if not name:
             continue
-        for i in range(7):
+        for i in range(span):
             day = dates[i] if i < len(dates) else None
-            cell = row[2 + i] if 2 + i < len(row) else None
+            cell = row[first_col + i] if first_col + i < len(row) else None
             if day and cell not in ("", None):
                 out.append(PresenceRow(name=name, work_date=day, site_id=site))
     return out
