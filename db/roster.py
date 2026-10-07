@@ -17,6 +17,7 @@ employees, то есть ручная правка смены в панели б
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Optional
 
@@ -259,6 +260,24 @@ def import_roster(sheets, *, drivers_sheet: str,
             raise
 
         people_new = after_people - before_people
+        # Журнал прогонов: он для того и заведён — «что изменилось с прошлого
+        # раза» иначе восстанавливается только по памяти.
+        # JSON передаётся строкой с приведением в SQL, а не через psycopg.Jsonb:
+        # psycopg локально не установлен, и зависимость от него здесь сделала бы
+        # нетестируемым весь import_roster.
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO audit_log (actor, action, subject, details)"
+                " VALUES ('import', 'import_roster', %s, %s::jsonb)",
+                (f"{len(titles)} листов", json.dumps({
+                    "people_total": after_people,
+                    "people_new": people_new,
+                    "presence_total": after_presence,
+                    "carpool_total": after_carpool,
+                    "renamed": renamed,
+                    "skipped_sheets": [t for t, _ in skipped],
+                }, ensure_ascii=False)),
+            )
         presence_new = after_presence - before_presence
         with conn.cursor() as cur:
             cur.execute(

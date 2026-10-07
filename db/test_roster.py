@@ -66,6 +66,8 @@ class FakeDB:
                 out.append("clear_carpool")
             elif sql.startswith("UPDATE person p SET full_name"):
                 out.append("rename")
+            elif sql.startswith("INSERT INTO audit_log"):
+                out.append("audit")
         return out
 
 
@@ -110,6 +112,8 @@ class FakeCursor:
             pass
         elif s.startswith("UPDATE capture_run"):
             pass
+        elif s.startswith("INSERT INTO audit_log"):
+            self.db.log.append(("audit", s, params))
         else:
             raise AssertionError(f"неожиданный SQL: {s[:90]}")
 
@@ -347,3 +351,10 @@ def test_rename_runs_before_releasing_telegram_ids():
     _, db, _ = run()
     steps = db.steps()
     assert steps.index("rename") < steps.index("release")
+
+
+def test_import_writes_an_audit_record():
+    """Журнал для того и заведён: «что изменилось с прошлого раза»
+    иначе восстанавливается только по памяти."""
+    _, db, _ = run()
+    assert "audit" in db.steps()

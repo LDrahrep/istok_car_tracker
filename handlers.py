@@ -1739,6 +1739,50 @@ class BotHandlers:
         text = "\n".join(lines)
         await self._reply(update, text[:4000], reply_markup=self.kb_main(uid))
 
+    async def db_sheets_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Все листы таблицы с разбором. /db_sheets
+
+        Отвечает на вопрос, который иначе решается только глазами: какие
+        листы есть и почему часть из них не попадает в импорт. Диагностика
+        внутри /db_import показывает лишь «похожие на табель» — лист без
+        признаков объекта и без дат в неё не попадает вовсе.
+        """
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+
+        from db.importer import is_timesheet, site_from_sheet_name, week_dates_from_name
+
+        try:
+            titles = await asyncio.to_thread(self.sheets.sheet_titles)
+        except Exception as e:
+            logger.exception("sheet_titles failed")
+            await self._reply(
+                update, f"❌ Ошибка: {e}", reply_markup=self.kb_main(uid)
+            )
+            return
+
+        timesheets, others = [], []
+        for title in titles:
+            if is_timesheet(title):
+                dates = week_dates_from_name(title)
+                timesheets.append(f"  ✅ {title} → {dates[0]}")
+            else:
+                site = site_from_sheet_name(title)
+                dates = week_dates_from_name(title)
+                mark = []
+                if site:
+                    mark.append(f"объект {site}")
+                if dates:
+                    mark.append(f"недели с {dates[0]}")
+                others.append(f"  — {title}" + (f"  ({', '.join(mark)})" if mark else ""))
+
+        lines = [f"📄 Листов всего: {len(titles)}", "",
+                 f"Табели ({len(timesheets)}):"] + sorted(timesheets)
+        lines += ["", f"Остальные ({len(others)}):"] + others
+        text = "\n".join(lines)
+        await self._reply(update, text[:4000], reply_markup=self.kb_main(uid))
+
     async def db_merge_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Склеить две записи одного человека. /db_merge Старое Имя | Новое Имя
 

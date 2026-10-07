@@ -90,6 +90,11 @@ CREATE TABLE IF NOT EXISTS person (
     updated_at      timestamptz NOT NULL DEFAULT now()
 );
 
+-- Когда человек впервые появился. Без этого на вопрос «откуда взялись
+-- 52 новых» ответить нечем: импорт трогает updated_at у всех строк сразу.
+-- У записей, созданных до появления колонки, дата будет датой миграции.
+ALTER TABLE person ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
+
 CREATE INDEX IF NOT EXISTS person_site_idx ON person (current_site_id);
 CREATE INDEX IF NOT EXISTS person_shift_idx ON person (shift);
 

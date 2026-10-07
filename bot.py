@@ -309,6 +309,7 @@ def build_app():
     app.add_handler(CommandHandler("db_import", handlers.db_import_command))
     app.add_handler(CommandHandler("db_export", handlers.db_export_command))
     app.add_handler(CommandHandler("db_merge", handlers.db_merge_command))
+    app.add_handler(CommandHandler("db_sheets", handlers.db_sheets_command))
     app.add_handler(CommandHandler("english", handlers.set_language_english))
     app.add_handler(CommandHandler("russian", handlers.set_language_russian))
 
