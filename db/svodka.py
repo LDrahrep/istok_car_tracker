@@ -172,3 +172,55 @@ def export(sheets, start: date, end: date, *, strict: bool = True) -> dict:
         written[title] = len(table) - 1
     info["written"] = written
     return info
+
+
+# Водители с живым списком, но без отметок в табеле. Еженедельная проверка
+# ловит МОЛЧАНИЕ: не ответил за два часа — список чистится. Человека,
+# который ушёл, но по привычке жмёт «Да», она не поймает никогда.
+# Присутствие ловит: в табеле его нет, а список он подтверждает.
+#
+# Окно считается от последней даты, за которую вообще есть табели, а не от
+# сегодня: табели заполняют с запозданием, и «нет отметок на этой неделе»
+# означало бы почти всех.
+STALE_SQL = """
+WITH site_last AS (
+    -- Последняя дата, за которую есть табель ПО ЭТОМУ объекту. Общий максимум
+    -- не годится: у Fluidstack табель до 06.10, у остальных до 04.10, и окно
+    -- от общего максимума отсекало бы людей с совершенно свежими отметками.
+    SELECT site_id, max(work_date) AS d FROM presence GROUP BY site_id
+), latest AS (SELECT max(snapshot_date) AS d FROM carpool_snapshot),
+  active AS (
+    SELECT s.driver_name, s.telegram_id, s.passengers,
+           (SELECT p.id FROM person p WHERE p.telegram_id = s.telegram_id) AS person_id,
+           (SELECT p.current_site_id FROM person p WHERE p.telegram_id = s.telegram_id) AS site_id
+    FROM carpool_snapshot s, latest
+    WHERE s.snapshot_date = latest.d AND cardinality(s.passengers) > 0
+)
+SELECT a.driver_name, a.telegram_id, a.passengers,
+       (SELECT max(pr.work_date) FROM presence pr WHERE pr.person_id = a.person_id) AS last_seen
+FROM active a
+LEFT JOIN site_last sl ON sl.site_id = a.site_id
+WHERE NOT EXISTS (
+    SELECT 1 FROM presence pr
+    WHERE pr.person_id = a.person_id
+      AND pr.work_date > COALESCE(sl.d, (SELECT max(d) FROM site_last)) - %s::int
+)
+ORDER BY cardinality(a.passengers) DESC, a.driver_name
+"""
+
+
+def stale_drivers(days: int = 7) -> dict:
+    """Кто держит пассажиров, не появляясь в табелях.
+
+    Пассажир такого водителя заблокирован: действующий водитель получит
+    «уже записан к другому водителю» и не сможет его взять.
+    """
+    from .store import _connect, enabled
+
+    if not enabled():
+        return {"enabled": False}
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(STALE_SQL, (days,))
+        rows = cur.fetchall()
+    return {"enabled": True, "days": days, "rows": rows,
+            "blocked": sum(len(r[2] or []) for r in rows)}

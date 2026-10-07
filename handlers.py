@@ -1739,6 +1739,55 @@ class BotHandlers:
         text = "\n".join(lines)
         await self._reply(update, text[:4000], reply_markup=self.kb_main(uid))
 
+    async def db_stale_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Водители со списком, но без отметок в табеле. /db_stale [дней]"""
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+
+        args = context.args or []
+        days = int(args[0]) if args and args[0].isdigit() else 7
+
+        from db import svodka
+
+        try:
+            info = await asyncio.to_thread(svodka.stale_drivers, days)
+        except Exception as e:
+            logger.exception("stale failed")
+            await self._reply(update, f"❌ Ошибка: {e}", reply_markup=self.kb_main(uid))
+            return
+
+        if not info.get("enabled"):
+            await self._reply(
+                update, "⚪️ БД выключена: переменная DATABASE_URL не задана.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        rows = info["rows"]
+        if not rows:
+            await self._reply(
+                update,
+                f"✅ Таких нет: у всех со списком есть отметки за последние "
+                f"{days} дн. табелей.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        lines = [f"🧹 Держат пассажиров без отметок в табеле ({days} дн.)",
+                 f"Водителей: {len(rows)}, заблокировано людей: {info['blocked']}",
+                 ""]
+        for name, tg_id, passengers, last_seen in rows[:15]:
+            seen = last_seen.isoformat() if last_seen else "никогда"
+            lines.append(f"• {name} (id {tg_id}), последняя отметка {seen}")
+            lines.append(f"  держит: {', '.join(passengers)}")
+        if len(rows) > 15:
+            lines.append(f"\n…ещё {len(rows) - 15}")
+        lines.append("\nЧтобы освободить людей — удали водителя или очисти "
+                     "его список в таблице.")
+        await self._reply(update, "\n".join(lines)[:4000],
+                          reply_markup=self.kb_main(uid))
+
     async def db_report_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Сводка по доплатам из базы. /db_report 2026-09-28 2026-10-04"""
         uid = update.effective_user.id
