@@ -197,7 +197,12 @@ WITH site_last AS (
     WHERE s.snapshot_date = latest.d AND cardinality(s.passengers) > 0
 )
 SELECT a.driver_name, a.telegram_id, a.passengers,
-       (SELECT max(pr.work_date) FROM presence pr WHERE pr.person_id = a.person_id) AS last_seen
+       (SELECT max(pr.work_date) FROM presence pr WHERE pr.person_id = a.person_id) AS last_seen,
+       a.site_id,
+       -- По какую дату вообще есть табель по его объекту. Без этого вывод
+       -- обманчив: водитель может быть отмечен в табеле, который ещё не
+       -- загрузили, и тогда это ложная тревога, а не ушедший человек.
+       sl.d AS site_last
 FROM active a
 LEFT JOIN site_last sl ON sl.site_id = a.site_id
 WHERE NOT EXISTS (

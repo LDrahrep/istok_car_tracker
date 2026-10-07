@@ -1776,10 +1776,16 @@ class BotHandlers:
 
         lines = [f"🧹 Держат пассажиров без отметок в табеле ({days} дн.)",
                  f"Водителей: {len(rows)}, заблокировано людей: {info['blocked']}",
+                 "",
+                 "⚠️ Считается по ЗАГРУЖЕННЫМ табелям. Если табель недели ещё "
+                 "не в таблице, человек попадёт сюда зря — смотри дату справа.",
                  ""]
-        for name, tg_id, passengers, last_seen in rows[:15]:
+        for name, tg_id, passengers, last_seen, site, site_last in rows[:15]:
             seen = last_seen.isoformat() if last_seen else "никогда"
-            lines.append(f"• {name} (id {tg_id}), последняя отметка {seen}")
+            горизонт = (f"табель {site or '?'} загружен по {site_last}"
+                        if site_last else "табелей по его объекту нет")
+            lines.append(f"• {name} (id {tg_id})")
+            lines.append(f"  последняя отметка {seen} · {горизонт}")
             lines.append(f"  держит: {', '.join(passengers)}")
         if len(rows) > 15:
             lines.append(f"\n…ещё {len(rows) - 15}")
