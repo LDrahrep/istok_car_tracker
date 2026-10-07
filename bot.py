@@ -311,6 +311,7 @@ def build_app():
     app.add_handler(CommandHandler("db_merge", handlers.db_merge_command))
     app.add_handler(CommandHandler("db_sheets", handlers.db_sheets_command))
     app.add_handler(CommandHandler("db_site_rename", handlers.db_site_rename_command))
+    app.add_handler(CommandHandler("db_report", handlers.db_report_command))
     app.add_handler(CommandHandler("english", handlers.set_language_english))
     app.add_handler(CommandHandler("russian", handlers.set_language_russian))
 

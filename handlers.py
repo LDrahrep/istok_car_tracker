@@ -1739,6 +1739,83 @@ class BotHandlers:
         text = "\n".join(lines)
         await self._reply(update, text[:4000], reply_markup=self.kb_main(uid))
 
+    async def db_report_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Сводка по доплатам из базы. /db_report 2026-09-28 2026-10-04"""
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+
+        args = context.args or []
+        if len(args) < 2:
+            await self._reply(
+                update,
+                "/db_report ГГГГ-ММ-ДД ГГГГ-ММ-ДД\n\n"
+                "Пример: /db_report 2026-09-28 2026-10-04\n\n"
+                "Считает по правилу: отмечен в табеле И не меньше двух "
+                "пассажиров в ЭТОТ день. Кладёт по листу на объект.\n\n"
+                "Добавь «табель» в конец, чтобы посчитать по правилу GAS — "
+                "день за отметку в табеле, пассажиры проверяются раз на период. "
+                "Оно мягче: за 14–20.09 это 809 дней против 718.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        from datetime import date as _date
+
+        try:
+            start, end = (_date.fromisoformat(a) for a in args[:2])
+        except ValueError:
+            await self._reply(
+                update, "Даты в виде ГГГГ-ММ-ДД, например 2026-09-28.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+        if end < start:
+            start, end = end, start
+        strict = "табель" not in " ".join(args).casefold()
+
+        await self._reply(update, f"⏳ считаю сводку {start} — {end}…")
+
+        from db import svodka
+
+        try:
+            info = await asyncio.to_thread(lambda: svodka.export(self.sheets, start, end, strict=strict))
+        except Exception as e:
+            logger.exception("svodka failed")
+            await self._reply(update, f"❌ Ошибка: {e}", reply_markup=self.kb_main(uid))
+            return
+
+        if not info.get("enabled"):
+            await self._reply(
+                update, "⚪️ БД выключена: переменная DATABASE_URL не задана.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        rule = ("строгое: 2+ пассажира в этот день" if info.get("strict")
+                else "по табелю (как GAS): пассажиры раз на период")
+        lines = [f"📊 Сводка {start} — {end}",
+                 f"Правило — {rule}",
+                 f"Недель в периоде: {len(info['weeks'])}", ""]
+        if not info["written"]:
+            lines.append("Ни одного засчитанного дня за период.")
+        for title, count in sorted(info["written"].items()):
+            lines.append(f"• {title}: {count} водителей")
+
+        # Водители с пассажирами, но без отметки в табеле: для них это
+        # потерянные деньги, и причина должна быть названа, а не скрыта.
+        unmarked = info.get("unmarked") or []
+        if unmarked:
+            lines.append(f"\n⚠️ Есть пассажиры, но нет отметки в табеле: "
+                         f"{len(unmarked)} чел.")
+            for name, days in unmarked[:8]:
+                lines.append(f"  • {name}: {days} дн.")
+            if len(unmarked) > 8:
+                lines.append(f"  …ещё {len(unmarked) - 8}")
+
+        await self._reply(update, "\n".join(lines)[:4000],
+                          reply_markup=self.kb_main(uid))
+
     async def db_site_rename_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Переименовать объект, сохранив историю. /db_site_rename AMAZON TULANE [Имя]"""
         uid = update.effective_user.id
