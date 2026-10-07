@@ -1739,6 +1739,55 @@ class BotHandlers:
         text = "\n".join(lines)
         await self._reply(update, text[:4000], reply_markup=self.kb_main(uid))
 
+    async def db_site_rename_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Переименовать объект, сохранив историю. /db_site_rename AMAZON TULANE [Имя]"""
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+
+        args = context.args or []
+        if len(args) < 2:
+            await self._reply(
+                update,
+                "/db_site_rename СТАРЫЙ НОВЫЙ [Отображаемое имя]\n\n"
+                "Пример: /db_site_rename AMAZON TULANE Tulane\n\n"
+                "История переезжает на новый объект, старое имя становится "
+                "псевдонимом — исторические листы продолжат читаться.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        from db import roster
+
+        try:
+            info = await asyncio.to_thread(
+                roster.rename_site, args[0], args[1],
+                " ".join(args[2:]) or None,
+            )
+        except Exception as e:
+            logger.exception("rename_site failed")
+            await self._reply(update, f"❌ Ошибка: {e}", reply_markup=self.kb_main(uid))
+            return
+
+        if not info.get("ok"):
+            reasons = {"same": "Имена совпадают — переименовывать нечего.",
+                       "no_old": f"Объекта «{args[0]}» в справочнике нет."}
+            await self._reply(
+                update, reasons.get(info.get("reason"), "Не удалось."),
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        lines = [f"✅ {info['old']} → {info['new']}", "",
+                 f"Перенесено отметок: {info['presence_moved']}",
+                 f"Людей переведено: {info['people']}"]
+        if info["presence_dropped"]:
+            lines.append(f"⚠️ Не перенеслось: {info['presence_dropped']} "
+                         "(человек был отмечен в этот день на обоих объектах)")
+        lines.append("")
+        lines.append("Старое имя осталось псевдонимом — исторические листы читаются.")
+        await self._reply(update, "\n".join(lines), reply_markup=self.kb_main(uid))
+
     async def db_sheets_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Все листы таблицы с разбором. /db_sheets
 

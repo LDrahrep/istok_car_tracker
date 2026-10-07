@@ -411,3 +411,76 @@ def merge_people(old_name: str, new_name: str) -> dict:
     dropped = {k: before[k] - moved[k] for k in moved}
     return {"ok": True, "old": old_row[2], "new": new_row[2],
             "moved": moved, "dropped": dropped}
+
+
+def rename_site(old_id: str, new_id: str, new_name: Optional[str] = None) -> dict:
+    """Переименовать объект, сохранив историю: AMAZON стал TULANE.
+
+    Это не косметика. Доплаты привязаны к объекту, и если оставить две
+    строки, история одной площадки разъедется на две сводки: до 20.09
+    под старым именем, после 28.09 под новым.
+
+    Старое имя становится псевдонимом нового — иначе следующий импорт
+    прочитает исторические листы «…AMAZON» и заведёт объект заново.
+
+    NOT EXISTS отсекает строки, которые нарушили бы ключ после переноса
+    (человек отмечен в один день и там, и там). Они остаются у старого
+    объекта и уходят вместе с ним, поэтому их число возвращается отдельно.
+    """
+    old_id, new_id = old_id.strip().upper(), new_id.strip().upper()
+    if not old_id or not new_id or old_id == new_id:
+        return {"ok": False, "reason": "same"}
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, aliases FROM site WHERE id = ANY(%s)",
+                        ([old_id, new_id],))
+            found = {r[0]: r for r in cur.fetchall()}
+            if old_id not in found:
+                return {"ok": False, "reason": "no_old", "old": old_id}
+
+            if new_id not in found:
+                cur.execute(
+                    "INSERT INTO site (id, name, aliases) VALUES (%s, %s, ARRAY[%s])",
+                    (new_id, new_name or new_id.title(), new_id),
+                )
+
+            cur.execute("SELECT count(*) FROM presence WHERE site_id = %s", (old_id,))
+            before = cur.fetchone()[0]
+
+            cur.execute(
+                "UPDATE presence SET site_id = %s WHERE site_id = %s"
+                " AND NOT EXISTS (SELECT 1 FROM presence x WHERE x.person_id = presence.person_id"
+                "   AND x.work_date = presence.work_date AND x.site_id = %s)",
+                (new_id, old_id, new_id),
+            )
+            moved = cur.rowcount
+
+            cur.execute(
+                "UPDATE person SET current_site_id = %s, updated_at = now()"
+                " WHERE current_site_id = %s", (new_id, old_id),
+            )
+            people = cur.rowcount
+
+            # Старое имя переезжает в псевдонимы: исторические листы «…AMAZON»
+            # должны и дальше читаться, но уже как новый объект.
+            cur.execute(
+                "UPDATE site SET aliases = ARRAY(SELECT DISTINCT unnest("
+                "  aliases || (SELECT aliases FROM site WHERE id = %s) || ARRAY[%s]))"
+                " WHERE id = %s", (old_id, old_id, new_id),
+            )
+            if new_name:
+                cur.execute("UPDATE site SET name = %s WHERE id = %s", (new_name, new_id))
+
+            cur.execute("DELETE FROM site WHERE id = %s", (old_id,))
+            cur.execute(
+                "INSERT INTO audit_log (actor, action, subject, details)"
+                " VALUES ('admin', 'rename_site', %s, %s::jsonb)",
+                (f"{old_id} → {new_id}",
+                 json.dumps({"presence_moved": moved, "presence_dropped": before - moved,
+                             "people": people}, ensure_ascii=False)),
+            )
+        conn.commit()
+
+    return {"ok": True, "old": old_id, "new": new_id, "presence_moved": moved,
+            "presence_dropped": before - moved, "people": people}

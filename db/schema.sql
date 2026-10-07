@@ -76,16 +76,17 @@ CREATE TABLE IF NOT EXISTS site (
 -- появляются чаще. Здесь новый объект это одна строка, заводится в админке.
 ALTER TABLE site ADD COLUMN IF NOT EXISTS aliases text[] NOT NULL DEFAULT '{}';
 
-INSERT INTO site (id, name, aliases) VALUES
+-- Засев ТОЛЬКО на пустой таблице. Дальше справочником владеет администратор:
+-- объекты переименовывают и объединяют (AMAZON стал TULANE), и повторный
+-- засев при каждом старте бота воскрешал бы удалённые строки.
+INSERT INTO site (id, name, aliases)
+SELECT * FROM (VALUES
     ('AMAZON',     'Amazon',     ARRAY['AMAZON','AMZN']),
     ('MELTECH',    'Meltech',    ARRAY['MELTECH','MELTEH','MILTECH','MLT']),
     ('COLUMBUS',   'Columbus',   ARRAY['COLUMBUS','CLMB','CBUS']),
-    ('BUFFALO',    'Buffalo',    ARRAY['BUFFALO','BUFF','BUF','BFLO']),
-    ('TULANE',     'Tulane',     ARRAY['TULANE']),
-    ('FLUIDSTACK', 'Fluidstack', ARRAY['FLUIDSTACK TX','FLUIDSTACK','FSTX'])
-ON CONFLICT (id) DO UPDATE SET
-    -- Псевдонимы дополняем, а не затираем: администратор мог добавить свои.
-    aliases = ARRAY(SELECT DISTINCT unnest(site.aliases || EXCLUDED.aliases));
+    ('BUFFALO',    'Buffalo',    ARRAY['BUFFALO','BUFF','BUF','BFLO'])
+) AS seed(id, name, aliases)
+WHERE NOT EXISTS (SELECT 1 FROM site);
 
 CREATE TABLE IF NOT EXISTS person (
     id              bigserial   PRIMARY KEY,
