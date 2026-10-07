@@ -25,9 +25,20 @@ SITE_ALIASES = {
     "COLUMBUS": "COLUMBUS", "CLMB": "COLUMBUS", "CBUS": "COLUMBUS",
     "BUFFALO": "BUFFALO", "BUFF": "BUFFALO", "BUF": "BUFFALO", "BFLO": "BUFFALO",
 }
-SITE_SUFFIX_RE = re.compile(
-    r"\b(" + "|".join(sorted(SITE_ALIASES, key=len, reverse=True)) + r")\s*$", re.I
-)
+def _site_re(aliases: dict[str, str], anchored: bool) -> re.Pattern:
+    """Регексп поиска объекта по списку псевдонимов.
+
+    Строится из переданного словаря, а не из констант: справочник объектов
+    живёт в таблице `site`, иначе новый объект — это правка кода и деплой.
+    Длинные псевдонимы идут первыми, чтобы «FLUIDSTACK TX» не схлопнулся
+    в «FLUIDSTACK».
+    """
+    body = "|".join(re.escape(a) for a in sorted(aliases, key=len, reverse=True))
+    tail = r")\s*$" if anchored else r")\b"
+    return re.compile(r"\b(" + body + tail, re.I)
+
+
+SITE_SUFFIX_RE = _site_re(SITE_ALIASES, anchored=True)
 # Диапазон недели в имени листа. Разделители внутри дат бывают любые
 # («09142026-09202026», «8/17/2026-8/23/2026»), поэтому ловим весь кусок
 # целиком и разбираем его цифрами, а не группами регекспа — см. _split_range.
@@ -81,12 +92,27 @@ def split_shift_and_site(raw_shift: str) -> tuple[str, Optional[str]]:
     return ("day", site) if site else ("unknown", None)
 
 
-def site_from_sheet_name(sheet_name: str) -> Optional[str]:
+def site_from_sheet_name(sheet_name: str,
+                        aliases: Optional[dict[str, str]] = None) -> Optional[str]:
+    """Объект из имени листа.
+
+    Сначала ищем в конце — так названы листы основной таблицы
+    («09/14/2026-09/20/2026 AMAZON»). Если не нашли, ищем где угодно: в
+    документах, которые ведут подрядчики, объект стоит в начале
+    («Tulane 9/28/2026-10/4/2026»). Суффикс проверяется первым, чтобы
+    поведение на уже работающих именах не изменилось ни на шаг.
+    """
     name = (sheet_name or "").strip()
     if name.casefold() in NOT_TIMESHEETS:
         return None
-    m = SITE_SUFFIX_RE.search(name)
-    return SITE_ALIASES[m.group(1).upper()] if m else None
+    table = aliases or SITE_ALIASES
+    for anchored in (True, False):
+        pattern = (SITE_SUFFIX_RE if anchored and table is SITE_ALIASES
+                   else _site_re(table, anchored))
+        m = pattern.search(name)
+        if m:
+            return table[m.group(1).upper()]
+    return None
 
 
 def _month_day_candidates(token: str) -> list[tuple[int, int, int]]:
@@ -181,14 +207,15 @@ def _as_date(value) -> Optional[date]:
     return None
 
 
-def parse_timesheet(values: Sequence[Sequence[object]], sheet_name: str) -> list[PresenceRow]:
+def parse_timesheet(values: Sequence[Sequence[object]], sheet_name: str,
+                    aliases: Optional[dict[str, str]] = None) -> list[PresenceRow]:
     """Табель → список фактов присутствия.
 
     Геометрия жёсткая и такая же, как в GAS: даты — строка 1, колонки C..I;
     имена — колонка B; данные начинаются со строки 3; присутствием считается
     любая непустая ячейка (часы, крестик, инициалы — значение не разбирается).
     """
-    site = site_from_sheet_name(sheet_name)
+    site = site_from_sheet_name(sheet_name, aliases)
     if not site or len(values) < 3:
         return []
 
@@ -330,13 +357,14 @@ def sites_referenced(
     return sorted(ids)
 
 
-def is_timesheet(sheet_name: str) -> bool:
+def is_timesheet(sheet_name: str,
+                 aliases: Optional[dict[str, str]] = None) -> bool:
     """Лист-табель = опознанный объект И разбираемый диапазон дат в имени.
 
     Второе условие отсеивает листы вроде «PHASE 5 AMAZON»: объект в имени
     есть, а к какой неделе относятся колонки — неизвестно.
     """
-    return (site_from_sheet_name(sheet_name) is not None
+    return (site_from_sheet_name(sheet_name, aliases) is not None
             and week_dates_from_name(sheet_name) is not None)
 
 
@@ -409,7 +437,8 @@ def build_carpool(
     return rows, bad
 
 
-def suspicious_sheets(titles: Iterable[str]) -> list[tuple[str, str]]:
+def suspicious_sheets(titles: Iterable[str],
+                      aliases: Optional[dict[str, str]] = None) -> list[tuple[str, str]]:
     """Листы, похожие на табель, но не прошедшие отбор, — с причиной.
 
     Молчаливый пропуск здесь дорого стоит: если табель за неделю назван
@@ -422,9 +451,9 @@ def suspicious_sheets(titles: Iterable[str]) -> list[tuple[str, str]]:
     """
     out: list[tuple[str, str]] = []
     for title in titles:
-        if is_timesheet(title):
+        if is_timesheet(title, aliases):
             continue
-        site = site_from_sheet_name(title)
+        site = site_from_sheet_name(title, aliases)
         dates = week_dates_from_name(title)
         if site is None and dates is None:
             continue

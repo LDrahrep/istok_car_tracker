@@ -91,6 +91,13 @@ class FakeCursor:
             self._one = (1,)
         elif s.startswith("SELECT count(*) FROM "):
             self._one = (len(self.db.tables[s.split("FROM ")[1].strip()]),)
+        elif s.startswith("SELECT id, aliases FROM site"):
+            # Справочник объектов приезжает из базы; на фейке отдаём канон.
+            from db.importer import SITE_ALIASES
+            byid = {}
+            for alias, sid in SITE_ALIASES.items():
+                byid.setdefault(sid, []).append(alias)
+            self._all = sorted(byid.items())
         elif s.startswith("SELECT name_key, id FROM person"):
             self._all = list(self.db.person_ids().items())
         elif s.startswith("SELECT telegram_id, id FROM person"):

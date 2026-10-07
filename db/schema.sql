@@ -71,6 +71,22 @@ CREATE TABLE IF NOT EXISTS site (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Псевдонимы в именах листов: «MELTEH», «Fluidstack TX», «CBUS». Держать их
+-- в коде нельзя — новый объект тогда стоит правки кода и деплоя, а объекты
+-- появляются чаще. Здесь новый объект это одна строка, заводится в админке.
+ALTER TABLE site ADD COLUMN IF NOT EXISTS aliases text[] NOT NULL DEFAULT '{}';
+
+INSERT INTO site (id, name, aliases) VALUES
+    ('AMAZON',     'Amazon',     ARRAY['AMAZON','AMZN']),
+    ('MELTECH',    'Meltech',    ARRAY['MELTECH','MELTEH','MILTECH','MLT']),
+    ('COLUMBUS',   'Columbus',   ARRAY['COLUMBUS','CLMB','CBUS']),
+    ('BUFFALO',    'Buffalo',    ARRAY['BUFFALO','BUFF','BUF','BFLO']),
+    ('TULANE',     'Tulane',     ARRAY['TULANE']),
+    ('FLUIDSTACK', 'Fluidstack', ARRAY['FLUIDSTACK TX','FLUIDSTACK','FSTX'])
+ON CONFLICT (id) DO UPDATE SET
+    -- Псевдонимы дополняем, а не затираем: администратор мог добавить свои.
+    aliases = ARRAY(SELECT DISTINCT unnest(site.aliases || EXCLUDED.aliases));
+
 CREATE TABLE IF NOT EXISTS person (
     id              bigserial   PRIMARY KEY,
     -- Ключ из tabeli. Есть не у всех, поэтому UNIQUE, но не NOT NULL.

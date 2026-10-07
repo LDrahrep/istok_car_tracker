@@ -454,3 +454,52 @@ def test_dated_sheet_with_unknown_site_is_flagged():
     """Новый объект, которого нет в SITE_ALIASES, — самая дорогая потеря."""
     (title, reason), = suspicious_sheets(["09212026-09272026 NEWSITE"])
     assert "объект" in reason
+
+
+# ──────────── справочник объектов приходит извне ────────────
+
+EXTRA_SITES = dict(
+    {k: v for k, v in __import__("importer").SITE_ALIASES.items()},
+    **{"TULANE": "TULANE", "FLUIDSTACK TX": "FLUIDSTACK", "FLUIDSTACK": "FLUIDSTACK"},
+)
+
+
+def test_site_recognised_at_the_start_of_the_name():
+    """Подрядчики пишут объект первым: «Tulane 9/28/2026-10/4/2026».
+
+    В основной таблице он последний, и регексп искал только суффикс —
+    из-за этого ни один лист такого документа не опознавался как табель.
+    """
+    assert site_from_sheet_name("Tulane 9/28/2026-10/4/2026", EXTRA_SITES) == "TULANE"
+    assert site_from_sheet_name("meltech 9/28/2026-10/04/2026", EXTRA_SITES) == "MELTECH"
+
+
+def test_multiword_alias_wins_over_its_prefix():
+    """«FLUIDSTACK TX» не должен схлопнуться в «FLUIDSTACK» — длинные первыми."""
+    assert site_from_sheet_name(
+        "Fluidstack TX 10/05/2026-10/11/2026", EXTRA_SITES) == "FLUIDSTACK"
+
+
+def test_new_site_needs_no_code_change():
+    """Объект, которого нет в константах, опознаётся через переданный словарь.
+
+    Это и есть смысл переноса справочника в таблицу site: новый объект —
+    строка в админке, а не правка кода и деплой.
+    """
+    table = {"NEWSITE": "NEWSITE"}
+    assert site_from_sheet_name("09212026-09272026 NEWSITE", table) == "NEWSITE"
+    assert is_timesheet("09212026-09272026 NEWSITE", table)
+
+
+def test_known_names_behave_exactly_as_before():
+    """Суффикс проверяется первым — поведение рабочих имён не меняется."""
+    assert site_from_sheet_name(BUFFALO_SHEET, EXTRA_SITES) == "BUFFALO"
+    assert site_from_sheet_name("0907-0913 MELTEH", EXTRA_SITES) == "MELTECH"
+    assert site_from_sheet_name("Svodka Columbus", EXTRA_SITES) is None
+    assert site_from_sheet_name("employees", EXTRA_SITES) is None
+
+
+def test_contractor_sheets_become_timesheets():
+    for title in ("Tulane 9/28/2026-10/4/2026", "buffalo 9/28/2026-10/4/2026",
+                  "Fluidstack TX 10/05/2026-10/11/2026"):
+        assert is_timesheet(title, EXTRA_SITES), title

@@ -144,9 +144,15 @@ def import_roster(sheets, *, drivers_sheet: str,
     if not enabled():
         return {"enabled": False}
 
+    # Справочник объектов — из базы: новый объект заводится строкой в админке,
+    # без правки кода и деплоя.
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id, aliases FROM site")
+        aliases = {a.upper(): sid for sid, arr in cur.fetchall() for a in (arr or [sid])}
+
     all_titles = sheets.sheet_titles()
-    skipped = suspicious_sheets(all_titles)
-    titles = [t for t in all_titles if is_timesheet(t)]
+    skipped = suspicious_sheets(all_titles, aliases)
+    titles = [t for t in all_titles if is_timesheet(t, aliases)]
     if only:
         needle = only.casefold()
         titles = [t for t in titles if needle in t.casefold()]
@@ -154,7 +160,7 @@ def import_roster(sheets, *, drivers_sheet: str,
     presence_rows = []
     per_sheet: dict[str, int] = {}
     for title in titles:
-        rows = parse_timesheet(sheets._values(title), title)
+        rows = parse_timesheet(sheets._values(title), title, aliases)
         per_sheet[title] = len(rows)
         presence_rows.extend(rows)
 
@@ -167,7 +173,7 @@ def import_roster(sheets, *, drivers_sheet: str,
     # неделе: иначе объект, где сейчас никого нет, исчезнет из выпадающего
     # списка в админке, и назначить туда человека будет нечем. Поэтому
     # каноничный набор плюс всё, на что реально ссылаются строки.
-    sites = sorted(set(SITE_ALIASES.values())
+    sites = sorted(set(aliases.values())
                    | set(sites_referenced(people, presence_rows)))
 
     with _connect() as conn:
