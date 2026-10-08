@@ -88,3 +88,60 @@ def employees() -> Optional[list]:
 def invalidate() -> None:
     """Сбросить кэш после записи, чтобы следующее чтение увидело изменение."""
     _cache.pop("employees", None)
+
+
+WHOIS_SQL = """
+SELECT p.id, p.full_name, p.shift, p.telegram_id, p.current_site_id,
+       (SELECT max(pr.work_date) FROM presence pr WHERE pr.person_id = p.id),
+       (SELECT count(*) FROM presence pr WHERE pr.person_id = p.id)
+FROM person p
+WHERE p.name_key = %s OR p.telegram_id = %s
+LIMIT 1
+"""
+
+# Кого он возит сегодня и с кем едет сам — два разных вопроса,
+# потому что один и тот же человек бывает и водителем, и пассажиром.
+DRIVES_SQL = """
+SELECT pass.full_name FROM carpool c JOIN person pass ON pass.id = c.passenger_id
+WHERE c.driver_id = %s AND c.ride_date = %s ORDER BY c.seat
+"""
+RIDES_SQL = """
+SELECT d.full_name, d.telegram_id FROM carpool c JOIN person d ON d.id = c.driver_id
+WHERE c.passenger_id = %s AND c.ride_date = %s
+"""
+HISTORY_SQL = """
+SELECT c.ride_date, d.full_name FROM carpool c JOIN person d ON d.id = c.driver_id
+WHERE c.passenger_id = %s ORDER BY c.ride_date DESC LIMIT 7
+"""
+
+
+def whois(query: str) -> Optional[dict]:
+    """Всё, что база знает о человеке: по имени или по telegram_id."""
+    from .capture import today_in_business_tz
+    from .importer import name_key
+    from .store import _connect, enabled as db_enabled
+
+    if not db_enabled():
+        return None
+    q = (query or "").strip()
+    if not q:
+        return None
+    tg = int(q) if q.isdigit() else -1
+    today = today_in_business_tz()
+
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(WHOIS_SQL, (name_key(q), tg))
+        row = cur.fetchone()
+        if not row:
+            return {"found": False, "query": q}
+        pid, full_name, shift, tgid, site, last_seen, days = row
+        cur.execute(DRIVES_SQL, (pid, today))
+        drives = [r[0] for r in cur.fetchall()]
+        cur.execute(RIDES_SQL, (pid, today))
+        rides = cur.fetchone()
+        cur.execute(HISTORY_SQL, (pid,))
+        history = cur.fetchall()
+
+    return {"found": True, "name": full_name, "shift": shift, "telegram_id": tgid,
+            "site": site, "last_seen": last_seen, "presence_days": days,
+            "drives": drives, "rides_with": rides, "history": history}

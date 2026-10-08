@@ -334,6 +334,9 @@ def build_app():
     # и пока админ собирал снимок на 291 водителя, бот не отвечал никому.
     # Пользовательские сценарии остаются последовательными: там важен
     # порядок шагов диалога.
+    app.add_handler(CommandHandler("admin", handlers.admin_command))
+    app.add_handler(CommandHandler("whois", handlers.whois_command, block=False))
+    app.add_handler(CommandHandler("unlink", handlers.unlink_command, block=False))
     app.add_handler(CommandHandler("db_status", handlers.db_status_command, block=False))
     app.add_handler(CommandHandler("db_capture", handlers.db_capture_command, block=False))
     app.add_handler(CommandHandler("db_backfill", handlers.db_backfill_command, block=False))

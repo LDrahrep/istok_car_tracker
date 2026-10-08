@@ -1557,6 +1557,126 @@ class BotHandlers:
     # запустить backfill с ноутбука нельзя, а из бота — можно.
     # ======================================================
 
+    async def admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Указатель по админским командам. /admin"""
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+        import admin_commands
+
+        await self._reply(update, admin_commands.render()[:4000],
+                          reply_markup=self.kb_main(uid))
+
+    async def whois_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Всё про человека. /whois <имя или telegram id>"""
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+
+        query = " ".join(context.args or []).strip()
+        if not query:
+            await self._reply(
+                update,
+                "/whois <имя или telegram id>\n\nПример: /whois Akmal Shah",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        from db import read as db_read
+
+        try:
+            info = await asyncio.to_thread(db_read.whois, query)
+        except Exception as e:
+            logger.exception("whois failed")
+            await self._reply(update, f"❌ Ошибка: {e}", reply_markup=self.kb_main(uid))
+            return
+
+        if info is None:
+            await self._reply(update, "⚪️ БД выключена.", reply_markup=self.kb_main(uid))
+            return
+        if not info.get("found"):
+            await self._reply(
+                update,
+                f"Не нашёл «{query}».\n\nИмя сверяется без учёта порядка слов "
+                "и регистра, так что дело скорее в написании.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        смена = {"day": "☀️ день", "night": "🌙 ночь"}.get(info["shift"], "не указана")
+        lines = [f"👤 {info['name']}", "",
+                 f"Смена: {смена}",
+                 f"Объект: {info['site'] or 'не определён'}"]
+        if info["telegram_id"]:
+            lines.append(f"Telegram ID: {info['telegram_id']}")
+        lines.append(f"Отметок в табелях: {info['presence_days']}"
+                     + (f", последняя {info['last_seen']}" if info["last_seen"] else ""))
+
+        if info["drives"]:
+            lines.append(f"\n🚗 Сегодня везёт ({len(info['drives'])}):")
+            for n in info["drives"]:
+                lines.append(f"  • {n}")
+        if info["rides_with"]:
+            водитель, tg = info["rides_with"]
+            lines.append(f"\n🧍 Сегодня едет с: {водитель}"
+                         + (f" (id {tg})" if tg else ""))
+        if not info["drives"] and not info["rides_with"]:
+            lines.append("\nСегодня ни с кем не связан.")
+
+        if info["history"]:
+            lines.append("\nПоследние поездки пассажиром:")
+            for дата, водитель in info["history"]:
+                lines.append(f"  {дата} — {водитель}")
+
+        await self._reply(update, "\n".join(lines)[:4000],
+                          reply_markup=self.kb_main(uid))
+
+    async def unlink_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Открепить пассажира от его водителя. /unlink <имя>"""
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+
+        name = " ".join(context.args or []).strip()
+        if not name:
+            await self._reply(
+                update,
+                "/unlink <имя пассажира>\n\n"
+                "Освобождает человека: его сможет записать другой водитель.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        try:
+            # except_tgid=0 — ни один водитель не имеет такого id,
+            # значит открепляем от кого угодно.
+            hit = await asyncio.to_thread(
+                self.sheets.unlink_passenger_everywhere, name, except_tgid=0
+            )
+        except Exception as e:
+            logger.exception("unlink failed")
+            await self._reply(update, f"❌ Ошибка: {e}", reply_markup=self.kb_main(uid))
+            return
+
+        if not hit:
+            await self._reply(
+                update, f"«{name}» ни к кому не записан — освобождать нечего.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        tg_id, водитель = hit
+        await self.log_admin(
+            context, "Admin unlink",
+            f"{name} откреплён от {водитель} (tg={tg_id})", update,
+        )
+        await self._reply(
+            update,
+            f"✅ «{name}» откреплён от водителя {водитель}.\n\n"
+            "Теперь его может записать любой другой.",
+            reply_markup=self.kb_main(uid),
+        )
+
     async def db_status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Состояние захвата. /db_status"""
         uid = update.effective_user.id
