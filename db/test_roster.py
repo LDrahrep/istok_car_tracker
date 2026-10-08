@@ -62,6 +62,8 @@ class FakeDB:
                 out.append("release")
             elif sql.startswith("SELECT name_key, id"):
                 out.append("read_ids")
+            elif sql.startswith("DELETE FROM presence"):
+                out.append("clear_presence")
             elif sql.startswith("DELETE FROM carpool"):
                 out.append("clear_carpool")
             elif sql.startswith("UPDATE person p SET full_name"):
@@ -107,6 +109,13 @@ class FakeCursor:
                          if r[3] is not None]
         elif s.startswith("SELECT snapshot_date, telegram_id"):
             self._all = list(SNAPSHOTS)
+        elif s.startswith("DELETE FROM presence"):
+            # Лист перезаписывает свой диапазон: чистим то, что он покрывает.
+            sites, days = params
+            covered = set(zip(sites, days))
+            for k in [k for k, r in self.db.tables["presence"].items()
+                      if (r[2], r[1]) in covered]:
+                del self.db.tables["presence"][k]
         elif s.startswith("DELETE FROM carpool"):
             for k in [k for k, r in self.db.tables["carpool"].items()
                       if r[-1] == "snapshot"]:
@@ -365,3 +374,16 @@ def test_import_writes_an_audit_record():
     иначе восстанавливается только по памяти."""
     _, db, _ = run()
     assert "audit" in db.steps()
+
+
+def test_sheet_range_is_cleared_before_writing():
+    """Исчезнувшая из табеля отметка должна исчезнуть и из базы.
+
+    Импорт только добавлял: убрали человеку день — а база продолжала его
+    засчитывать, и выглядело это нормально, потому что строка «была
+    и осталась». Четыре такие нашлись в живых данных.
+    """
+    _, db, _ = run()
+    steps = db.steps()
+    assert "clear_presence" in steps
+    assert steps.index("clear_presence") < steps.index("many:presence")

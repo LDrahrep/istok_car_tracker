@@ -23,6 +23,8 @@ from typing import Optional
 
 from .importer import (
     SITE_ALIASES,
+    site_from_sheet_name,
+    week_dates_from_name,
     PersonRow,
     build_carpool,
     build_people,
@@ -89,6 +91,19 @@ CARPOOL_INSERT = """
 INSERT INTO carpool (ride_date, driver_id, passenger_id, seat, source)
 VALUES (%s, %s, %s, %s, 'snapshot')
 ON CONFLICT (ride_date, passenger_id) DO NOTHING
+"""
+
+# Прочитанный лист перезаписывает свой диапазон целиком. Без этого импорт
+# только добавляет: убрали человеку день из табеля — а база продолжает его
+# засчитывать, и выглядит это нормально, потому что строка «была и осталась».
+# Удаляем только source='timesheet': отметки из других источников (tabeli
+# в будущем) не трогаем.
+PRESENCE_CLEAR = """
+DELETE FROM presence
+WHERE source = 'timesheet'
+  AND (site_id, work_date) IN (
+      SELECT * FROM unnest(%s::text[], %s::date[])
+  )
 """
 
 PRESENCE_INSERT = """
@@ -160,6 +175,7 @@ def import_roster(sheets, *, drivers_sheet: str,
     # читать два десятка листов ради смены одного человека незачем.
     if roster_only:
         titles, skipped, presence_rows, per_sheet = [], [], [], {}
+        covered = []
     else:
         all_titles = sheets.sheet_titles()
         skipped = suspicious_sheets(all_titles, aliases)
@@ -170,10 +186,17 @@ def import_roster(sheets, *, drivers_sheet: str,
 
         presence_rows = []
         per_sheet = {}
+        covered: list[tuple[str, object]] = []
         for title in titles:
             rows = parse_timesheet(sheets._values(title), title, aliases)
             per_sheet[title] = len(rows)
             presence_rows.extend(rows)
+            # Диапазон листа запоминаем целиком, а не по строкам с отметками:
+            # день без единой отметки тоже должен очистить старые записи.
+            site = site_from_sheet_name(title, aliases)
+            for day in (week_dates_from_name(title) or []):
+                if site and day:
+                    covered.append((site, day))
 
     employees = [(e.name, e.shift) for e in sheets.get_all_employees() if e.name]
     tgids = _driver_tgids(sheets, drivers_sheet)
@@ -242,6 +265,12 @@ def import_roster(sheets, *, drivers_sheet: str,
                     presence_params.append(
                         (pid, r.work_date, r.site_id, "timesheet", r.hours)
                     )
+                # Сначала чистим диапазоны прочитанных листов, потом пишем:
+                # иначе исчезнувшая из табеля отметка осталась бы навсегда.
+                if covered:
+                    cur.execute(PRESENCE_CLEAR, (
+                        [c[0] for c in covered], [c[1] for c in covered],
+                    ))
                 cur.executemany(PRESENCE_INSERT, presence_params)
 
                 # Связи водитель↔пассажир собираются из уже лежащих в базе

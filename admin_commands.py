@@ -55,8 +55,37 @@ def all_names() -> set[str]:
     return {c.name for _, cmds in GROUPS for c in cmds}
 
 
+def version() -> str:
+    """Что за код сейчас работает.
+
+    Railway помечает деплой SUCCESS в момент создания, а не когда
+    контейнер начал отвечать. Дважды за сутки это привело к неверному
+    выводу: проверка шла по старому контейнеру, а выглядела как
+    проверка нового. Признак из самого приложения снимает весь класс
+    таких ошибок.
+    """
+    import os
+    import subprocess
+
+    sha = os.getenv("RAILWAY_GIT_COMMIT_SHA", "")
+    if not sha:
+        try:
+            sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
+                                 text=True, timeout=3).stdout.strip()
+        except Exception:  # noqa: BLE001
+            sha = ""
+    msg = os.getenv("RAILWAY_GIT_COMMIT_MESSAGE", "")
+    started = os.getenv("RAILWAY_DEPLOYMENT_ID", "")
+    parts = [f"Версия: {sha[:7] or 'неизвестна'}"]
+    if msg:
+        parts.append(f"«{msg.splitlines()[0][:60]}»")
+    if started:
+        parts.append(f"деплой {started[:8]}")
+    return " · ".join(parts)
+
+
 def render() -> str:
-    lines = ["🛠 Админские команды", ""]
+    lines = ["🛠 Админские команды", version(), ""]
     for title, cmds in GROUPS:
         lines.append(f"▸ {title}")
         for c in cmds:
