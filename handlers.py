@@ -1739,6 +1739,64 @@ class BotHandlers:
         text = "\n".join(lines)
         await self._reply(update, text[:4000], reply_markup=self.kb_main(uid))
 
+    async def db_diff_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Сверить состав карпулов в таблице и в базе. /db_diff
+
+        Это условие перехода на чтение из базы: пока картины расходятся,
+        переключать нельзя. Сравнение идёт по нормализованному имени —
+        «Akmal Shah» и «Shah Akmal» один человек, а не расхождение.
+        """
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+
+        await self._reply(update, "⏳ сверяю таблицу и базу…")
+        from db import mirror
+
+        try:
+            info = await asyncio.to_thread(
+                mirror.compare, self.sheets, self.config.DRIVERS_PASSENGERS_SHEET
+            )
+        except Exception as e:
+            logger.exception("diff failed")
+            await self._reply(update, f"❌ Ошибка: {e}", reply_markup=self.kb_main(uid))
+            return
+
+        if not info.get("enabled"):
+            await self._reply(
+                update, "⚪️ БД выключена: переменная DATABASE_URL не задана.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        всего = (len(info["only_sheet"]) + len(info["only_db"])
+                 + len(info["differs"]))
+        lines = [f"🔍 Сверка на {info['day']}",
+                 f"Водителей: в таблице {info['sheet_drivers']}, "
+                 f"в базе {info['db_drivers']}", ""]
+        if not всего:
+            lines.append("✅ Расхождений нет — картины совпадают.")
+        else:
+            lines.append(f"Расхождений: {всего}")
+            if info["only_sheet"]:
+                lines.append(f"\n• Есть в таблице, нет в базе: {len(info['only_sheet'])}")
+                for tg, names in info["only_sheet"][:5]:
+                    lines.append(f"    {tg}: {', '.join(names)}")
+            if info["only_db"]:
+                lines.append(f"\n• Есть в базе, нет в таблице: {len(info['only_db'])}")
+                for tg, names in info["only_db"][:5]:
+                    lines.append(f"    {tg}: {', '.join(names)}")
+            if info["differs"]:
+                lines.append(f"\n• Разный состав: {len(info['differs'])}")
+                for tg, s_names, d_names in info["differs"][:5]:
+                    lines.append(f"    {tg}: таблица [{', '.join(s_names)}] "
+                                 f"≠ база [{', '.join(d_names)}]")
+            lines.append("\nℹ️ На старте расхождения ожидаемы: база знает только "
+                         "то, что изменилось после включения зеркала. Полную "
+                         "картину даст /db_capture.")
+        await self._reply(update, "\n".join(lines)[:4000],
+                          reply_markup=self.kb_main(uid))
+
     async def db_restore_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Вернуть списки, стёртые еженедельной проверкой. /db_restore [дней] [да]
 

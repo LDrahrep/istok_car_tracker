@@ -340,6 +340,7 @@ def build_app():
     app.add_handler(CommandHandler("db_report", handlers.db_report_command))
     app.add_handler(CommandHandler("db_stale", handlers.db_stale_command))
     app.add_handler(CommandHandler("db_restore", handlers.db_restore_command))
+    app.add_handler(CommandHandler("db_diff", handlers.db_diff_command))
     app.add_handler(CommandHandler("english", handlers.set_language_english))
     app.add_handler(CommandHandler("russian", handlers.set_language_russian))
 

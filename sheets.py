@@ -391,6 +391,21 @@ class SheetManager:
 
         return None
 
+    def _mirror_carpool(self, tg_id: int, driver_name: str, passengers):
+        """Повторить состав карпула в БД.
+
+        Вызывается из методов записи, а не из обработчиков: состав меняется
+        в одиннадцати местах, включая откаты после неудачной записи, и
+        подключение к каждому означало бы, что однажды одно забудут.
+        Здесь — единственная точка, через которую проходят все изменения.
+        """
+        try:
+            from db.mirror import sync_carpool
+
+            sync_carpool(tg_id, driver_name, passengers)
+        except Exception as exc:  # noqa: BLE001 — зеркало не трогает основной путь
+            logger.error("mirror: %s", exc)
+
     def upsert_driver_passengers(self, dp: DriverPassengers):
         values = self._values(self.config.DRIVERS_PASSENGERS_SHEET)
         headers = values[0]
@@ -426,6 +441,7 @@ class SheetManager:
 
             ws.batch_update(updates)
             self._invalidate(self.config.DRIVERS_PASSENGERS_SHEET)
+            self._mirror_carpool(dp.driver_tgid, dp.driver_name, dp.passengers)
         else:
             row_out = [""] * len(headers)
 
@@ -439,7 +455,7 @@ class SheetManager:
 
             ws.append_row(row_out, value_input_option="USER_ENTERED")
             self._invalidate(self.config.DRIVERS_PASSENGERS_SHEET)
-
+            self._mirror_carpool(dp.driver_tgid, dp.driver_name, dp.passengers)
 
     def delete_driver_passengers(self, tg_id: int) -> bool:
         """Удалить строку водителя из drivers_passengers по TGID."""
@@ -458,6 +474,8 @@ class SheetManager:
             if tg_col < len(row) and self._cell_eq(row[tg_col], tg_id):
                 ws.delete_rows(i)
                 self._invalidate(self.config.DRIVERS_PASSENGERS_SHEET)
+                # Удаление строки — это тоже состояние: пассажиров больше нет.
+                self._mirror_carpool(tg_id, "", [])
                 return True
 
         return False
