@@ -41,6 +41,12 @@ class Config:
     DRIVERS_PASSENGERS_SHEET: str = os.getenv("DRIVERS_PASSENGERS_SHEET", "drivers_passengers")
     CITIES_SHEET: str = os.getenv("CITIES_SHEET", "cities")
 
+    # Этап 2 перехода на БД: справочник сотрудников читается из Postgres,
+    # а не из листа employees. Выключено по умолчанию — включение и откат
+    # одной переменной окружения, без деплоя.
+    USE_DB_READS: bool = os.getenv("USE_DB_READS", "").strip().lower() in (
+        "1", "true", "yes", "да")
+
     PAGE_SIZE: int = int(os.getenv("PAGE_SIZE", "5"))
 
     STATE_FILE: str = os.getenv("STATE_FILE", "bot_state.json")

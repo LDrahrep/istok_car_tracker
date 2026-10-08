@@ -148,6 +148,19 @@ class SheetManager:
     # =========================
 
     def get_all_employees(self) -> list[Employee]:
+        """Справочник сотрудников: из БД, если включено, иначе из листа.
+
+        Откат на Sheets при любой неудаче — чтение из базы не должно
+        становиться единственной точкой отказа, пока переход не завершён.
+        """
+        from db import read as db_read
+
+        if db_read.enabled():
+            from_db = db_read.employees()
+            if from_db:
+                return from_db
+            logger.warning("USE_DB_READS включён, но база не ответила — читаю лист")
+
         values = self._values(self.config.EMPLOYEES_SHEET)
         if not values or len(values) < 2:
             logger.warning("get_all_employees: no data (rows=%d)", len(values) if values else 0)
@@ -400,9 +413,11 @@ class SheetManager:
         Здесь — единственная точка, через которую проходят все изменения.
         """
         try:
+            from db import read as db_read
             from db.mirror import sync_carpool
 
             sync_carpool(tg_id, driver_name, passengers)
+            db_read.invalidate()
         except Exception as exc:  # noqa: BLE001 — зеркало не трогает основной путь
             logger.error("mirror: %s", exc)
 
