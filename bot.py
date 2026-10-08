@@ -381,6 +381,17 @@ def build_app():
         )
         logger.info("Ежедневный захват снапшотов включён (21:05 %s)", CAPTURE_TZ)
 
+        # Ростер синхронизируется ДО снимка: HR меняет смены и добавляет
+        # людей каждый день, и снимок должен ложиться на свежие имена.
+        # Сверка 08.10 дала 50 расхождений из 1517 — все от того, что
+        # импорт запускали руками.
+        app.job_queue.run_daily(
+            handlers.db_roster_job,
+            time=_dt.time(hour=20, minute=45, tzinfo=CAPTURE_TZ),
+            name="daily_roster_sync",
+        )
+        logger.info("Ежедневная синхронизация ростера включена (20:45 %s)", CAPTURE_TZ)
+
     return app
 
 

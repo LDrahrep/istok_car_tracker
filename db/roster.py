@@ -133,7 +133,8 @@ def _count(cur, table: str) -> int:
 
 
 def import_roster(sheets, *, drivers_sheet: str,
-                  only: Optional[str] = None) -> dict:
+                  only: Optional[str] = None,
+                  roster_only: bool = False) -> dict:
     """Читает табели и справочники, наполняет site/person/presence.
 
     `only` — подстрока имени листа, чтобы сузить прогон. Это не украшение:
@@ -150,19 +151,25 @@ def import_roster(sheets, *, drivers_sheet: str,
         cur.execute("SELECT id, aliases FROM site")
         aliases = {a.upper(): sid for sid, arr in cur.fetchall() for a in (arr or [sid])}
 
-    all_titles = sheets.sheet_titles()
-    skipped = suspicious_sheets(all_titles, aliases)
-    titles = [t for t in all_titles if is_timesheet(t, aliases)]
-    if only:
-        needle = only.casefold()
-        titles = [t for t in titles if needle in t.casefold()]
+    # roster_only: только справочники, без табелей. Нужен для регулярной
+    # синхронизации — ростер меняется ежедневно, а табели раз в неделю, и
+    # читать два десятка листов ради смены одного человека незачем.
+    if roster_only:
+        titles, skipped, presence_rows, per_sheet = [], [], [], {}
+    else:
+        all_titles = sheets.sheet_titles()
+        skipped = suspicious_sheets(all_titles, aliases)
+        titles = [t for t in all_titles if is_timesheet(t, aliases)]
+        if only:
+            needle = only.casefold()
+            titles = [t for t in titles if needle in t.casefold()]
 
-    presence_rows = []
-    per_sheet: dict[str, int] = {}
-    for title in titles:
-        rows = parse_timesheet(sheets._values(title), title, aliases)
-        per_sheet[title] = len(rows)
-        presence_rows.extend(rows)
+        presence_rows = []
+        per_sheet = {}
+        for title in titles:
+            rows = parse_timesheet(sheets._values(title), title, aliases)
+            per_sheet[title] = len(rows)
+            presence_rows.extend(rows)
 
     employees = [(e.name, e.shift) for e in sheets.get_all_employees() if e.name]
     tgids = _driver_tgids(sheets, drivers_sheet)
@@ -181,7 +188,8 @@ def import_roster(sheets, *, drivers_sheet: str,
             cur.execute(
                 "INSERT INTO capture_run (source, rows_read) VALUES (%s, %s)"
                 " RETURNING id",
-                (f"import:{len(titles)}sheets", len(presence_rows)),
+                (f"import:roster" if roster_only else f"import:{len(titles)}sheets",
+                 len(presence_rows)),
             )
             run_id = cur.fetchone()[0]
         try:

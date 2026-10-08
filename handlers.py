@@ -1633,17 +1633,20 @@ class BotHandlers:
             return
 
         args = context.args or []
-        only = args[0].strip() if args else None
-        label = f"импорт «{only}»" if only else "импорт всех табелей"
+        raw = args[0].strip() if args else ""
+        roster_only = raw.casefold() in ("ростер", "roster")
+        only = None if (not raw or roster_only) else raw
+        label = ("синхронизация ростера" if roster_only
+                 else f"импорт «{only}»" if only else "импорт всех табелей")
         await self._reply(update, f"⏳ {label}… при полном прогоне это минута-две.")
 
         from db import roster
 
         try:
             info = await asyncio.to_thread(
-                roster.import_roster, self.sheets,
-                drivers_sheet=self.config.DRIVERS_SHEET,
-                only=only,
+                lambda: roster.import_roster(
+                    self.sheets, drivers_sheet=self.config.DRIVERS_SHEET,
+                    only=only, roster_only=roster_only)
             )
         except Exception as e:
             logger.exception("import failed")
@@ -1660,7 +1663,7 @@ class BotHandlers:
             )
             return
 
-        if not info["sheets"]:
+        if not info["sheets"] and not roster_only:
             await self._reply(
                 update,
                 "Ни один лист не опознан как табель.\n"
@@ -2285,6 +2288,41 @@ class BotHandlers:
             for reason, count in sorted(info["reasons"].items()):
                 lines.append(f"  • {reason}: {count}")
         await self._reply(update, "\n".join(lines), reply_markup=self.kb_main(uid))
+
+    async def db_roster_job(self, context: ContextTypes.DEFAULT_TYPE):
+        """Ежедневная синхронизация ростера.
+
+        Без неё база обречена отставать: HR меняет смены и добавляет людей
+        каждый день, а импорт запускали руками. Сверка 08.10 показала
+        50 расхождений из 1517 — все от устаревшего ростера, и именно они
+        делали переход на чтение из БД небезопасным.
+
+        Идёт до вечернего снимка, чтобы снимок уже ложился на свежие имена.
+        """
+        from db import roster, store
+
+        if not store.enabled():
+            return
+        try:
+            info = await asyncio.to_thread(
+                lambda: roster.import_roster(
+                    self.sheets, drivers_sheet=self.config.DRIVERS_SHEET,
+                    roster_only=True)
+            )
+            logger.info("roster sync: %s", info)
+            if self.config.ADMIN_CHAT_ID and info.get("enabled"):
+                await context.bot.send_message(
+                    chat_id=self.config.ADMIN_CHAT_ID,
+                    text=(f"👥 Ростер синхронизирован\n"
+                          f"Людей: {info['people_total']} (+{info['people_new']})"),
+                )
+        except Exception as e:
+            logger.exception("roster sync failed")
+            if self.config.ADMIN_CHAT_ID:
+                await context.bot.send_message(
+                    chat_id=self.config.ADMIN_CHAT_ID,
+                    text=f"⚠️ Синхронизация ростера не удалась: {str(e)[:200]}",
+                )
 
     async def db_capture_job(self, context: ContextTypes.DEFAULT_TYPE):
         """Ежедневный захват по расписанию. Параллелен снапшоту GAS."""

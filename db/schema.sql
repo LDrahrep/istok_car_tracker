@@ -187,7 +187,9 @@ CREATE OR REPLACE VIEW v_carpool_day AS
 SELECT s.snapshot_date            AS дата,
        s.driver_name              AS водитель,
        s.shift_raw                AS смена,
-       s.site_raw                 AS объект,
+       -- Колонка Site в листе хранит ШТАТ водителя (tn, ga, ca, ny),
+       -- а не объект. Объект берётся из присутствия — см. v_credit_day.
+       s.site_raw                 AS штат,
        s.passengers[1]            AS пассажир_1,
        s.passengers[2]            AS пассажир_2,
        s.passengers[3]            AS пассажир_3,
@@ -203,7 +205,7 @@ SELECT s.snapshot_date AS дата,
        p               AS пассажир,
        s.driver_name   AS водитель,
        s.shift_raw     AS смена,
-       s.site_raw      AS объект,
+       s.site_raw      AS штат,
        s.telegram_id   AS водитель_tg
 FROM carpool_snapshot s, unnest(s.passengers) p;
 
