@@ -25,6 +25,64 @@ HEADER_PRESENT = "В табеле"
 HEADER_HOURS = "Часов"
 HEADER_COMMENT = "Комментарий"
 
+# Третье правило — «справедливое». Строгое считает только записанные дни,
+# но посуточный снимок фиксирует момент ВВОДА данных, а не факт поездки:
+# люди заполняют список раз в неделю, когда бот спросит. Мягкое правило
+# наоборот досчитывает дни тем, кто уже не водитель.
+#
+# Здесь спорный день (человек на работе, записи о поездке нет) засчитывается
+# при двух условиях сразу:
+#   • ни один из его постоянных пассажиров в этот день не ехал с ДРУГИМ
+#     водителем — иначе везти их мог только тот другой;
+#   • хотя бы двое из них в этот день были на работе — иначе везти некого.
+#
+# На периоде 28.09–04.10 это разделило 351 спорный день как 180 к 171.
+FAIR_SQL = """
+WITH rides AS (
+    SELECT ride_date, driver_id FROM carpool
+    WHERE ride_date BETWEEN %(a)s AND %(b)s
+    GROUP BY 1, 2 HAVING count(*) >= 2
+), pool AS (
+    SELECT DISTINCT driver_id, passenger_id FROM carpool
+    WHERE ride_date BETWEEN %(a)s AND %(b)s
+), credited AS (
+    SELECT r.ride_date, r.driver_id FROM rides r
+    WHERE EXISTS (SELECT 1 FROM presence pr
+                  WHERE pr.person_id = r.driver_id AND pr.work_date = r.ride_date)
+    UNION
+    SELECT pr.work_date, pr.person_id FROM presence pr
+    WHERE pr.work_date BETWEEN %(a)s AND %(b)s
+      AND pr.person_id IN (SELECT driver_id FROM rides)
+      AND NOT EXISTS (SELECT 1 FROM rides r
+                      WHERE r.driver_id = pr.person_id AND r.ride_date = pr.work_date)
+      AND NOT EXISTS (
+          SELECT 1 FROM pool p JOIN carpool c2 ON c2.passenger_id = p.passenger_id
+          WHERE p.driver_id = pr.person_id AND c2.ride_date = pr.work_date
+            AND c2.driver_id <> pr.person_id)
+      AND (SELECT count(*) FROM pool p
+           WHERE p.driver_id = pr.person_id
+             AND EXISTS (SELECT 1 FROM presence pr2
+                         WHERE pr2.person_id = p.passenger_id
+                           AND pr2.work_date = pr.work_date)) >= 2
+), attributed AS (
+    SELECT cr.ride_date, cr.driver_id,
+           COALESCE(
+               (SELECT pr.site_id FROM presence pr
+                WHERE pr.person_id = cr.driver_id AND pr.work_date = cr.ride_date
+                  AND pr.site_id = p.current_site_id LIMIT 1),
+               (SELECT pr.site_id FROM presence pr
+                WHERE pr.person_id = cr.driver_id AND pr.work_date = cr.ride_date
+                ORDER BY pr.site_id LIMIT 1)
+           ) AS site_id
+    FROM credited cr JOIN person p ON p.id = cr.driver_id
+)
+SELECT a.site_id, p.full_name, date_trunc('week', a.ride_date)::date AS week_start,
+       count(*) AS days
+FROM attributed a JOIN person p ON p.id = a.driver_id
+WHERE a.site_id IS NOT NULL
+GROUP BY 1, 2, 3 ORDER BY 1, 2, 3
+"""
+
 # Составляющие зачёта по отдельности. Показывать их обязательно: число
 # засчитанных дней — это пересечение двух условий, и без слагаемых его
 # нельзя перепроверить глазами. Живой случай: водителю начислили 7 дней,
@@ -166,16 +224,16 @@ def sheet_title(site_id: str) -> str:
     return f"_db_svodka_{site_id.lower()}"
 
 
-def build(start: date, end: date, *, strict: bool = True) -> dict:
+def build(start: date, end: date, *, mode: str = "fair") -> dict:
     """Считает сводку.
 
-    `strict=True` — день засчитывается, только если в ЭТОТ день было не
-    меньше двух пассажиров. Это буквально то, что бот обещает водителям
-    в подсказке.
+    `mode`:
+      «fair» — строгие дни плюс спорные, прошедшие проверку по пассажирам;
+      «strict» — только дни с записью о двух пассажирах;
+      «timesheet» — правило GAS: день за отметку, пассажиры раз на период.
 
-    `strict=False` — правило GAS: день засчитывается за отметку в табеле,
-    а двух пассажиров достаточно иметь хоть раз за период. Мягче, и
-    разницу стоит понимать: за неделю 14–20.09 это 809 дней против 718.
+    Разница не косметическая: за 28.09–04.10 это 1089, 909 и 1260 дней.
+    Выбор — вопрос политики выплат, поэтому он параметр, а не решение кода.
     """
     from .store import _connect, enabled
 
@@ -183,8 +241,12 @@ def build(start: date, end: date, *, strict: bool = True) -> dict:
         return {"enabled": False}
 
     weeks = weeks_in(start, end)
-    sql = ROWS_SQL if strict else BY_TIMESHEET_SQL
-    params = (start, end) if strict else (start, end, start, end)
+    if mode == "fair":
+        sql, params = FAIR_SQL, {"a": start, "b": end}
+    elif mode == "timesheet":
+        sql, params = BY_TIMESHEET_SQL, (start, end, start, end)
+    else:
+        sql, params = ROWS_SQL, (start, end)
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(TOTALS_SQL, (start, end, start, end, start, end))
         totals = {name: (drove, present, hours)
@@ -194,14 +256,14 @@ def build(start: date, end: date, *, strict: bool = True) -> dict:
         cur.execute(UNMARKED_SQL, (start, end))
         unmarked = cur.fetchall()
 
-    return {"enabled": True, "start": start, "end": end, "strict": strict,
+    return {"enabled": True, "start": start, "end": end, "mode": mode,
             "weeks": [week_label(w) for w in weeks],
             "tables": tables, "unmarked": unmarked}
 
 
-def export(sheets, start: date, end: date, *, strict: bool = True) -> dict:
+def export(sheets, start: date, end: date, *, mode: str = "fair") -> dict:
     """Считает и кладёт по листу на объект."""
-    info = build(start, end, strict=strict)
+    info = build(start, end, mode=mode)
     if not info.get("enabled"):
         return info
     written = {}

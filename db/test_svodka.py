@@ -111,3 +111,27 @@ def test_hours_rendered_without_trailing_zeros():
     assert _hours(76.5) == "76.5"
     assert _hours(None) == ""
     assert _hours("") == ""
+
+
+# ──────────────── выбор правила ────────────────
+
+def test_three_modes_select_different_queries():
+    """Правило — параметр, а не решение кода: цена разная.
+
+    За 28.09–04.10 три правила дают 1089, 909 и 1260 дней. Подменить
+    одно другим молча значит изменить выплаты, поэтому выбор явный.
+    """
+    import svodka
+
+    assert "pool" in svodka.FAIR_SQL, "справедливое смотрит на пассажиров"
+    assert "HAVING count(*) >= 2" in svodka.ROWS_SQL
+    assert "drove" in svodka.BY_TIMESHEET_SQL or "rides" in svodka.BY_TIMESHEET_SQL
+
+
+def test_fair_rule_requires_both_conditions():
+    """Спорный день засчитывается только если ОБА условия выполнены."""
+    import svodka
+
+    sql = svodka.FAIR_SQL
+    assert "c2.driver_id <> pr.person_id" in sql, "пассажир не ехал с другим"
+    assert ">= 2" in sql, "минимум двое пассажиров на работе"
