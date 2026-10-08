@@ -205,6 +205,25 @@ def rebuild_day(day: Optional[date] = None) -> dict:
                 [(full, key) for key, full in names.items()],
             )
 
+            # Привязываем telegram_id к карточке водителя. Без этого он
+            # остаётся опознаваемым только по имени: переименуют — и
+            # RENAME_BY_TGID его не узнает, появится второй человек
+            # с расщеплённой историей.
+            # NOT EXISTS защищает UNIQUE: если ID уже за кем-то закреплён,
+            # это конфликт, и решать его должен человек, а не пересборка.
+            привязка = [(int(tg), name_key(nm or ""))
+                        for _, tg, nm, _ in snapshots if tg and nm]
+            if привязка:
+                cur.execute(
+                    "UPDATE person p SET telegram_id = v.tg, updated_at = now()"
+                    " FROM (SELECT unnest(%s::bigint[]) AS tg,"
+                    "              unnest(%s::text[]) AS nk) v"
+                    " WHERE p.name_key = v.nk AND p.telegram_id IS NULL"
+                    "   AND NOT EXISTS (SELECT 1 FROM person q"
+                    "                   WHERE q.telegram_id = v.tg)",
+                    ([t for t, _ in привязка], [k for _, k in привязка]),
+                )
+
             cur.execute("SELECT name_key, id FROM person")
             by_key = dict(cur.fetchall())
             cur.execute(
