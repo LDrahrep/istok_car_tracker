@@ -20,7 +20,27 @@ from datetime import date, timedelta
 from typing import Iterable, Optional
 
 HEADER_NAME = "Водитель"
+HEADER_DROVE = "Возил дней"
+HEADER_PRESENT = "В табеле"
 HEADER_COMMENT = "Комментарий"
+
+# Составляющие зачёта по отдельности. Показывать их обязательно: число
+# засчитанных дней — это пересечение двух условий, и без слагаемых его
+# нельзя перепроверить глазами. Живой случай: водителю начислили 7 дней,
+# хотя возил он 2, — увидеть это в одной колонке было невозможно.
+TOTALS_SQL = """
+WITH rides AS (
+    SELECT ride_date, driver_id FROM carpool
+    WHERE ride_date BETWEEN %s AND %s
+    GROUP BY 1, 2 HAVING count(*) >= 2
+)
+SELECT p.full_name,
+       (SELECT count(*) FROM rides r WHERE r.driver_id = p.id) AS drove,
+       (SELECT count(DISTINCT pr.work_date) FROM presence pr
+        WHERE pr.person_id = p.id AND pr.work_date BETWEEN %s AND %s) AS present
+FROM person p
+WHERE p.id IN (SELECT driver_id FROM rides)
+"""
 
 # Второе правило — то, по которому фактически считает GAS: день засчитывается
 # за ОТМЕТКУ В ТАБЕЛЕ, а список пассажиров проверяется один раз на период, а не
@@ -103,7 +123,8 @@ def weeks_in(start: date, end: date) -> list[date]:
     return out
 
 
-def pivot(rows: Iterable[tuple], weeks: list[date]) -> dict[str, list[list[str]]]:
+def pivot(rows: Iterable[tuple], weeks: list[date],
+          totals: Optional[dict[str, tuple[int, int]]] = None) -> dict[str, list[list[str]]]:
     """Строки (объект, водитель, неделя, дней) → таблица на каждый объект.
 
     Раскладка повторяет нынешнюю Svodka: имя, по колонке на неделю,
@@ -111,16 +132,20 @@ def pivot(rows: Iterable[tuple], weeks: list[date]) -> dict[str, list[list[str]]
     выгрузка не должна.
     """
     labels = [week_label(w) for w in weeks]
+    totals = totals or {}
     by_site: dict[str, dict[str, dict[str, int]]] = {}
     for site_id, name, week_start, days in rows:
         by_site.setdefault(site_id, {}).setdefault(name, {})[week_label(week_start)] = days
 
     out: dict[str, list[list[str]]] = {}
     for site_id, drivers in sorted(by_site.items()):
-        table = [[HEADER_NAME] + labels + [HEADER_COMMENT]]
+        table = [[HEADER_NAME] + labels
+                 + [HEADER_DROVE, HEADER_PRESENT, HEADER_COMMENT]]
         for name in sorted(drivers):
             cells = drivers[name]
-            table.append([name] + [str(cells.get(l, "")) for l in labels] + [""])
+            drove, present = totals.get(name, ("", ""))
+            table.append([name] + [str(cells.get(l, "")) for l in labels]
+                         + [str(drove), str(present), ""])
         out[site_id] = table
     return out
 
@@ -150,8 +175,10 @@ def build(start: date, end: date, *, strict: bool = True) -> dict:
     sql = ROWS_SQL if strict else BY_TIMESHEET_SQL
     params = (start, end) if strict else (start, end, start, end)
     with _connect() as conn, conn.cursor() as cur:
+        cur.execute(TOTALS_SQL, (start, end, start, end))
+        totals = {name: (drove, present) for name, drove, present in cur.fetchall()}
         cur.execute(sql, params)
-        tables = pivot(cur.fetchall(), weeks)
+        tables = pivot(cur.fetchall(), weeks, totals)
         cur.execute(UNMARKED_SQL, (start, end))
         unmarked = cur.fetchall()
 

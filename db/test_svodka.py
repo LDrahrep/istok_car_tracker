@@ -29,8 +29,9 @@ def test_table_repeats_the_existing_layout():
     rows = [("TULANE", "Ivan Ivanov", date(2026, 9, 14), 7)]
     table = pivot(rows, weeks_in(date(2026, 9, 14), date(2026, 9, 20)))["TULANE"]
 
-    assert table[0] == ["Водитель", "09/14 - 09/20", "Комментарий"]
-    assert table[1] == ["Ivan Ivanov", "7", ""]
+    assert table[0] == ["Водитель", "09/14 - 09/20",
+                        "Возил дней", "В табеле", "Комментарий"]
+    assert table[1] == ["Ivan Ivanov", "7", "", "", ""]
 
 
 def test_two_weeks_give_two_columns_like_the_biweekly_report():
@@ -39,15 +40,16 @@ def test_two_weeks_give_two_columns_like_the_biweekly_report():
     weeks = weeks_in(date(2026, 9, 14), date(2026, 9, 27))
     table = pivot(rows, weeks)["TULANE"]
 
-    assert table[0] == ["Водитель", "09/14 - 09/20", "09/21 - 09/27", "Комментарий"]
-    assert table[1] == ["Ivan Ivanov", "7", "5", ""]
+    assert table[0] == ["Водитель", "09/14 - 09/20", "09/21 - 09/27",
+                        "Возил дней", "В табеле", "Комментарий"]
+    assert table[1] == ["Ivan Ivanov", "7", "5", "", "", ""]
 
 
 def test_missing_week_leaves_the_cell_empty_not_zero():
     """Пусто и «0» читаются по-разному: пусто — не работал, 0 — не засчитано."""
     rows = [("TULANE", "Ivan Ivanov", date(2026, 9, 21), 5)]
     table = pivot(rows, weeks_in(date(2026, 9, 14), date(2026, 9, 27)))["TULANE"]
-    assert table[1] == ["Ivan Ivanov", "", "5", ""]
+    assert table[1] == ["Ivan Ivanov", "", "5", "", "", ""]
 
 
 def test_each_site_gets_its_own_table():
@@ -57,7 +59,7 @@ def test_each_site_gets_its_own_table():
     tables = pivot(rows, weeks_in(date(2026, 9, 14), date(2026, 9, 20)))
 
     assert set(tables) == {"TULANE", "BUFFALO"}
-    assert tables["BUFFALO"][1] == ["B B", "4", ""]
+    assert tables["BUFFALO"][1] == ["B B", "4", "", "", ""]
 
 
 def test_drivers_sorted_by_name():
@@ -78,3 +80,24 @@ def test_comment_column_is_left_empty():
     rows = [("TULANE", "Ivan Ivanov", date(2026, 9, 14), 7)]
     table = pivot(rows, weeks_in(date(2026, 9, 14), date(2026, 9, 20)))["TULANE"]
     assert table[1][-1] == ""
+
+
+def test_components_shown_next_to_the_credited_days():
+    """Случай Viacheslav Ochirov: засчитали 7, возил 2.
+
+    Число засчитанных дней — пересечение двух условий, и в одной колонке
+    ошибку увидеть нельзя. Слагаемые показываются рядом именно поэтому.
+    """
+    rows = [("COLUMBUS", "Viacheslav Ochirov", date(2026, 9, 28), 2)]
+    totals = {"Viacheslav Ochirov": (2, 7)}
+    table = pivot(rows, weeks_in(date(2026, 9, 28), date(2026, 10, 4)), totals)["COLUMBUS"]
+
+    assert table[0][-3:] == ["Возил дней", "В табеле", "Комментарий"]
+    assert table[1] == ["Viacheslav Ochirov", "2", "2", "7", ""]
+
+
+def test_driver_without_totals_still_renders():
+    """Отсутствие слагаемых не должно ломать строку целиком."""
+    rows = [("TULANE", "Ivan Ivanov", date(2026, 9, 14), 3)]
+    table = pivot(rows, weeks_in(date(2026, 9, 14), date(2026, 9, 20)), {})["TULANE"]
+    assert table[1] == ["Ivan Ivanov", "3", "", "", ""]
