@@ -178,6 +178,17 @@ async def expire_unanswered(bot, sheets, state, config):
             old_passengers = list(dp.passengers) if dp else []
 
             if dp and old_passengers:
+                # Пишем ДО очистки: 4 октября так стёрло 63 списка и 115
+                # пассажиров, и восстанавливать пришлось раскопками по
+                # посуточным снимкам. Журнал делает это одной командой.
+                from db import store
+
+                store.log_event(
+                    actor=f"bot:{tg_id}", action="weekly_clear",
+                    subject=dp.driver_name or str(tg_id),
+                    details={"telegram_id": tg_id, "shift": shift,
+                             "passengers": old_passengers},
+                )
                 dp.passengers = []
                 try:
                     sheets.upsert_driver_passengers(dp)

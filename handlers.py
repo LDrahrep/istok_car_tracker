@@ -1739,6 +1739,105 @@ class BotHandlers:
         text = "\n".join(lines)
         await self._reply(update, text[:4000], reply_markup=self.kb_main(uid))
 
+    async def db_restore_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Вернуть списки, стёртые еженедельной проверкой. /db_restore [дней] [да]
+
+        Без слова «да» только показывает, что будет сделано: очистка
+        затрагивает живых людей, и подтверждение здесь дешевле отката.
+        """
+        uid = update.effective_user.id
+        if uid not in self.config.ADMIN_USER_IDS:
+            return
+
+        args = [a.casefold() for a in (context.args or [])]
+        days = int(args[0]) if args and args[0].isdigit() else 7
+        apply = "да" in args or "yes" in args
+
+        from db import store
+
+        try:
+            events = await asyncio.to_thread(store.cleared_carpools, days)
+        except Exception as e:
+            logger.exception("restore failed")
+            await self._reply(update, f"❌ Ошибка: {e}", reply_markup=self.kb_main(uid))
+            return
+
+        if not events:
+            await self._reply(
+                update,
+                f"Журнал пуст за {days} дн. — очисток не было либо они "
+                "случились до того, как журнал начали вести.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
+        # Берём последнюю очистку на каждого водителя: если список стирали
+        # дважды, вернуть надо то, что было перед первой потерей смысла нет —
+        # актуальнее последнее известное состояние.
+        latest: dict[int, tuple] = {}
+        for happened_at, subject, details in events:
+            tg = details.get("telegram_id")
+            if tg is not None and tg not in latest:
+                latest[tg] = (happened_at, subject, details.get("passengers") or [])
+
+        plan, skipped = [], []
+        for tg, (when, name, passengers) in latest.items():
+            if not passengers:
+                continue
+            try:
+                dp = await asyncio.to_thread(self.sheets.get_driver_passengers, tg)
+            except Exception:
+                skipped.append((name, "не удалось прочитать запись"))
+                continue
+            if dp is None:
+                skipped.append((name, "водителя больше нет"))
+            elif dp.passengers:
+                # Не затираем: водитель уже собрал список заново, и он
+                # свежее того, что лежит в журнале.
+                skipped.append((name, "список уже не пуст"))
+            else:
+                plan.append((tg, name, passengers))
+
+        if not apply:
+            lines = [f"🔎 Что вернётся (за {days} дн.)", "",
+                     f"Водителей: {len(plan)}, пассажиров: "
+                     f"{sum(len(p) for _, _, p in plan)}", ""]
+            for _, name, passengers in plan[:12]:
+                lines.append(f"• {name}: {', '.join(passengers)}")
+            if len(plan) > 12:
+                lines.append(f"…ещё {len(plan) - 12}")
+            if skipped:
+                lines.append(f"\nПропущено: {len(skipped)}")
+                for name, why in skipped[:5]:
+                    lines.append(f"  • {name} — {why}")
+            lines.append("\nЧтобы выполнить: /db_restore "
+                         f"{days} да")
+            await self._reply(update, "\n".join(lines)[:4000],
+                              reply_markup=self.kb_main(uid))
+            return
+
+        await self._reply(update, f"⏳ возвращаю {len(plan)} списков…")
+        done, failed = 0, []
+        for tg, name, passengers in plan:
+            try:
+                await asyncio.to_thread(
+                    self.sheets.assign_passengers_to_driver,
+                    driver_tgid=tg, driver_name=name, passenger_names=passengers,
+                )
+                dp = DriverPassengers(driver_name=name, driver_tgid=tg,
+                                      passengers=passengers)
+                await asyncio.to_thread(self.sheets.upsert_driver_passengers, dp)
+                done += 1
+            except Exception as e:  # noqa: BLE001
+                failed.append((name, str(e)[:60]))
+
+        lines = [f"✅ Возвращено списков: {done}"]
+        if failed:
+            lines.append(f"❌ Не удалось: {len(failed)}")
+            for name, why in failed[:5]:
+                lines.append(f"  • {name}: {why}")
+        await self._reply(update, "\n".join(lines), reply_markup=self.kb_main(uid))
+
     async def db_stale_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Водители со списком, но без отметок в табеле. /db_stale [дней]"""
         uid = update.effective_user.id

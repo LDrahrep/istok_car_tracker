@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from admin_log import format_exception
 
@@ -126,9 +127,27 @@ def build_app():
         pool_timeout=20.0,
     )
 
-    app = Application.builder().token(
-        config.TELEGRAM_BOT_TOKEN
-    ).request(request).build()
+    # Состояние диалогов переживает перезапуск. Без этого каждый деплой
+    # обрывал тех, кто в этот момент вводил пассажиров: бот забывал, что
+    # спрашивал, и присланный список приезжал как непонятая реплика.
+    # Файл лежит рядом с bot_state.json, то есть на том же томе Railway —
+    # иначе он исчезал бы вместе с контейнером и смысла не имел.
+    builder = Application.builder().token(config.TELEGRAM_BOT_TOKEN).request(request)
+    try:
+        from telegram.ext import PicklePersistence
+
+        state_dir = os.path.dirname(os.path.abspath(config.STATE_FILE))
+        persistence_path = os.path.join(state_dir, "ptb_persistence.pickle")
+        builder = builder.persistence(
+            PicklePersistence(filepath=persistence_path, update_interval=30)
+        )
+        logger.info("Состояние диалогов сохраняется в %s", persistence_path)
+    except Exception as exc:  # noqa: BLE001
+        # Битый pickle не должен мешать боту подняться: работать без
+        # персистентности хуже, чем не работать вовсе.
+        logger.error("Персистентность недоступна (%s) — работаем без неё", exc)
+
+    app = builder.build()
 
     async def on_error(update, context):
         if not config.ADMIN_CHAT_ID:
@@ -293,6 +312,13 @@ def build_app():
         # Без таймаута брошенный диалог живёт вечно, и любой следующий текст
         # (в т.ч. ответ на еженедельную проверку) уходит в него.
         conversation_timeout=30 * 60,
+        # Диалог переживает перезапуск. Размен осознанный: раньше деплой
+        # случайно освобождал тех, кто застрял, — теперь не освобождает.
+        # Главный риск закрыт иначе: ответ на еженедельную проверку
+        # перехватывается обработчиком в группе -1 ДО диалога, независимо
+        # от того, в каком состоянии человек застрял.
+        persistent=True,
+        name="main_conversation",
     )
 
     app.add_handler(conv)
@@ -313,6 +339,7 @@ def build_app():
     app.add_handler(CommandHandler("db_site_rename", handlers.db_site_rename_command))
     app.add_handler(CommandHandler("db_report", handlers.db_report_command))
     app.add_handler(CommandHandler("db_stale", handlers.db_stale_command))
+    app.add_handler(CommandHandler("db_restore", handlers.db_restore_command))
     app.add_handler(CommandHandler("english", handlers.set_language_english))
     app.add_handler(CommandHandler("russian", handlers.set_language_russian))
 

@@ -208,3 +208,45 @@ def status() -> dict:
         "first": first, "last": last, "days": days, "runs": runs,
         "per_day": per_day, "gaps": gaps,
     }
+
+
+def log_event(actor: str, action: str, subject: str, details: dict) -> bool:
+    """Записать событие в журнал изменений.
+
+    Никогда не бросает и не блокирует вызывающего: журнал — страховка, а не
+    условие работы. Если БД недоступна, очистка списка всё равно должна
+    произойти, иначе еженедельная проверка зависнет на недоступной базе.
+    Цена отказа — потерянная запись в журнале, и об этом пишется в лог.
+    """
+    if not enabled():
+        return False
+    try:
+        import json
+
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO audit_log (actor, action, subject, details)"
+                    " VALUES (%s, %s, %s, %s::jsonb)",
+                    (actor, action, subject, json.dumps(details, ensure_ascii=False)),
+                )
+            conn.commit()
+        return True
+    except Exception as exc:  # noqa: BLE001 — журнал не должен ронять бота
+        logger.error("Не удалось записать в журнал (%s/%s): %s", actor, action, exc)
+        return False
+
+
+def cleared_carpools(since_days: int = 30) -> list[tuple]:
+    """Списки, стёртые еженедельной проверкой, — для восстановления."""
+    if not enabled():
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT happened_at, subject, details FROM audit_log"
+            " WHERE action = 'weekly_clear'"
+            "   AND happened_at > now() - make_interval(days => %s)"
+            " ORDER BY happened_at DESC",
+            (since_days,),
+        )
+        return cur.fetchall()
