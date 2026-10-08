@@ -32,7 +32,7 @@ CLEAR_DAY = "DELETE FROM carpool WHERE ride_date = %s AND driver_id = %s"
 
 INSERT_LINK = """
 INSERT INTO carpool (ride_date, driver_id, passenger_id, seat, source)
-VALUES (%s, %s, %s, %s, 'bot')
+VALUES (%s, %s, %s, %s, %s)
 ON CONFLICT DO NOTHING
 """
 
@@ -49,7 +49,8 @@ def _person_id(cur, full_name: str) -> Optional[int]:
 
 
 def sync_carpool(tg_id: int, driver_name: str, passengers: Iterable[str],
-                 *, day: Optional[date] = None, actor: str = "bot") -> dict:
+                 *, day: Optional[date] = None, actor: str = "bot",
+                 source: str = "bot") -> dict:
     """Повторить в БД текущий состав карпула водителя на сегодня.
 
     Состояние переписывается целиком, а не дописывается: список в боте —
@@ -88,7 +89,7 @@ def sync_carpool(tg_id: int, driver_name: str, passengers: Iterable[str],
                     if pid is None or pid == driver_id:
                         skipped.append(name)
                         continue
-                    cur.execute(INSERT_LINK, (day, driver_id, pid, seat))
+                    cur.execute(INSERT_LINK, (day, driver_id, pid, seat, source))
                     written += cur.rowcount
                     if cur.rowcount == 0:
                         # Пассажира уже везёт кто-то другой в этот день:
@@ -159,3 +160,35 @@ def compare(sheets, sheet_name: str, *, day: Optional[date] = None) -> dict:
     result.update({"enabled": True, "day": day,
                    "sheet_drivers": len(sheet_state), "db_drivers": len(db_state)})
     return result
+
+
+def rebuild_day(day: Optional[date] = None) -> dict:
+    """Пересобрать связи за день из снимка.
+
+    Нужно потому, что снимок и связи — разные слои: `/db_capture` пишет
+    в `carpool_snapshot`, а сверка и сводки смотрят в `carpool`. Без этого
+    шага свежий снимок есть, а связей за день нет, и сверка показывает
+    пустую базу при полной таблице.
+
+    Переиспользует тот же путь, что и зеркало: один код — одно поведение.
+    """
+    from .capture import today_in_business_tz
+    from .store import _connect, enabled
+
+    if not enabled():
+        return {"enabled": False}
+    day = day or today_in_business_tz()
+
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT telegram_id, driver_name, passengers FROM carpool_snapshot"
+            " WHERE snapshot_date = %s", (day,),
+        )
+        rows = cur.fetchall()
+
+    written = 0
+    for tg_id, driver_name, passengers in rows:
+        res = sync_carpool(int(tg_id), driver_name or "", passengers or [],
+                           day=day, source="snapshot")
+        written += res.get("written", 0)
+    return {"enabled": True, "day": day, "drivers": len(rows), "written": written}

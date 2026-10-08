@@ -161,8 +161,23 @@ def capture(sheets, sheet_name: str, *, source: str,
 
 
 def capture_live(sheets, sheet_name: str) -> dict:
-    return capture(sheets, sheet_name, source="live",
+    """Снимок на сегодня плюс пересборка связей за этот день.
+
+    Два шага, а не один, потому что это разные слои: снимок — сырая
+    фотография листа, связи — нормализованные пары людей. Без второго шага
+    свежий снимок есть, а сводки и сверка за сегодня пусты.
+    """
+    info = capture(sheets, sheet_name, source="live",
                    fixed_date=today_in_business_tz())
+    if info.get("enabled"):
+        try:
+            from .mirror import rebuild_day
+
+            info["links"] = rebuild_day(today_in_business_tz())
+        except Exception as exc:  # noqa: BLE001 — снимок уже сохранён
+            logger.error("Снимок записан, но связи не пересобраны: %s", exc)
+            info["links"] = {"error": str(exc)}
+    return info
 
 
 def backfill(sheets, week_sheet: str) -> dict:

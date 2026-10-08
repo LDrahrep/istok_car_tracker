@@ -1791,9 +1791,9 @@ class BotHandlers:
                 for tg, s_names, d_names in info["differs"][:5]:
                     lines.append(f"    {tg}: таблица [{', '.join(s_names)}] "
                                  f"≠ база [{', '.join(d_names)}]")
-            lines.append("\nℹ️ На старте расхождения ожидаемы: база знает только "
-                         "то, что изменилось после включения зеркала. Полную "
-                         "картину даст /db_capture.")
+            lines.append("\nℹ️ Связи за день берутся из изменений состава "
+                         "(зеркало) или из снимка. Выровнять: /db_capture — "
+                         "он снимет состояние и пересоберёт связи за сегодня.")
         await self._reply(update, "\n".join(lines)[:4000],
                           reply_markup=self.kb_main(uid))
 
@@ -2275,6 +2275,11 @@ class BotHandlers:
         ]
         if info["collapsed"]:
             lines.append(f"Схлопнуто дублей: {info['collapsed']}")
+        links = info.get("links") or {}
+        if links.get("written") is not None:
+            lines.append(f"Связей пересобрано: {links['written']}")
+        elif links.get("error"):
+            lines.append(f"⚠️ Связи не пересобраны: {links['error'][:80]}")
         if info["skipped"]:
             lines.append(f"Пропущено: {info['skipped']}")
             for reason, count in sorted(info["reasons"].items()):
