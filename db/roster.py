@@ -92,9 +92,13 @@ ON CONFLICT (ride_date, passenger_id) DO NOTHING
 """
 
 PRESENCE_INSERT = """
-INSERT INTO presence (person_id, work_date, site_id, source)
-VALUES (%s, %s, %s, %s)
-ON CONFLICT (person_id, work_date, site_id) DO NOTHING
+INSERT INTO presence (person_id, work_date, site_id, source, hours)
+VALUES (%s, %s, %s, %s, %s)
+ON CONFLICT (person_id, work_date, site_id) DO UPDATE SET
+    -- Часы обновляем: табель правят задним числом, и повторный импорт
+    -- должен подхватить исправление. COALESCE защищает уже известное
+    -- значение от затирания кривой ячейкой.
+    hours = COALESCE(EXCLUDED.hours, presence.hours)
 """
 
 
@@ -236,7 +240,7 @@ def import_roster(sheets, *, drivers_sheet: str,
                         orphans += 1
                         continue
                     presence_params.append(
-                        (pid, r.work_date, r.site_id, "timesheet")
+                        (pid, r.work_date, r.site_id, "timesheet", r.hours)
                     )
                 cur.executemany(PRESENCE_INSERT, presence_params)
 

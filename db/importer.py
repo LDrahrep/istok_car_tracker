@@ -54,6 +54,7 @@ class PresenceRow:
     name: str
     work_date: date
     site_id: str
+    hours: Optional[float] = None
 
 
 def name_key(raw: str) -> str:
@@ -207,6 +208,26 @@ def _as_date(value) -> Optional[date]:
     return None
 
 
+def parse_hours(cell: object) -> Optional[float]:
+    """Часы из ячейки табеля или None, если это не число.
+
+    None — не отсутствие на работе, а «был, часы не разобрались». Живой
+    случай: Google превратил введённое в дату «1/10/1900». Факт выхода
+    из-за этого терять нельзя, поэтому присутствие считается отдельно.
+
+    Больше суток в сутках не бывает — такое значение тоже отбрасывается,
+    это опечатка, а не рекорд.
+    """
+    raw = str(cell if cell is not None else "").strip().replace(",", ".")
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if 0 < value <= 24 else None
+
+
 def header_geometry(header: Sequence[object]) -> tuple[Optional[int], list[date]]:
     """С какой колонки идут даты и сколько их.
 
@@ -273,7 +294,8 @@ def parse_timesheet(values: Sequence[Sequence[object]], sheet_name: str,
             day = dates[i] if i < len(dates) else None
             cell = row[first_col + i] if first_col + i < len(row) else None
             if day and cell not in ("", None):
-                out.append(PresenceRow(name=name, work_date=day, site_id=site))
+                out.append(PresenceRow(name=name, work_date=day, site_id=site,
+                                       hours=parse_hours(cell)))
     return out
 
 

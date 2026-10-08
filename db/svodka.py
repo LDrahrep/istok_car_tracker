@@ -22,6 +22,7 @@ from typing import Iterable, Optional
 HEADER_NAME = "Водитель"
 HEADER_DROVE = "Возил дней"
 HEADER_PRESENT = "В табеле"
+HEADER_HOURS = "Часов"
 HEADER_COMMENT = "Комментарий"
 
 # Составляющие зачёта по отдельности. Показывать их обязательно: число
@@ -37,7 +38,9 @@ WITH rides AS (
 SELECT p.full_name,
        (SELECT count(*) FROM rides r WHERE r.driver_id = p.id) AS drove,
        (SELECT count(DISTINCT pr.work_date) FROM presence pr
-        WHERE pr.person_id = p.id AND pr.work_date BETWEEN %s AND %s) AS present
+        WHERE pr.person_id = p.id AND pr.work_date BETWEEN %s AND %s) AS present,
+       (SELECT sum(pr.hours) FROM presence pr
+        WHERE pr.person_id = p.id AND pr.work_date BETWEEN %s AND %s) AS hours
 FROM person p
 WHERE p.id IN (SELECT driver_id FROM rides)
 """
@@ -123,6 +126,14 @@ def weeks_in(start: date, end: date) -> list[date]:
     return out
 
 
+def _hours(value) -> str:
+    """Часы без лишнего хвоста: 77, а не 77.00."""
+    if value in (None, ""):
+        return ""
+    number = float(value)
+    return str(int(number)) if number == int(number) else f"{number:.1f}"
+
+
 def pivot(rows: Iterable[tuple], weeks: list[date],
           totals: Optional[dict[str, tuple[int, int]]] = None) -> dict[str, list[list[str]]]:
     """Строки (объект, водитель, неделя, дней) → таблица на каждый объект.
@@ -140,12 +151,12 @@ def pivot(rows: Iterable[tuple], weeks: list[date],
     out: dict[str, list[list[str]]] = {}
     for site_id, drivers in sorted(by_site.items()):
         table = [[HEADER_NAME] + labels
-                 + [HEADER_DROVE, HEADER_PRESENT, HEADER_COMMENT]]
+                 + [HEADER_DROVE, HEADER_PRESENT, HEADER_HOURS, HEADER_COMMENT]]
         for name in sorted(drivers):
             cells = drivers[name]
-            drove, present = totals.get(name, ("", ""))
+            drove, present, hours = totals.get(name, ("", "", ""))
             table.append([name] + [str(cells.get(l, "")) for l in labels]
-                         + [str(drove), str(present), ""])
+                         + [str(drove), str(present), _hours(hours), ""])
         out[site_id] = table
     return out
 
@@ -175,8 +186,9 @@ def build(start: date, end: date, *, strict: bool = True) -> dict:
     sql = ROWS_SQL if strict else BY_TIMESHEET_SQL
     params = (start, end) if strict else (start, end, start, end)
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(TOTALS_SQL, (start, end, start, end))
-        totals = {name: (drove, present) for name, drove, present in cur.fetchall()}
+        cur.execute(TOTALS_SQL, (start, end, start, end, start, end))
+        totals = {name: (drove, present, hours)
+                  for name, drove, present, hours in cur.fetchall()}
         cur.execute(sql, params)
         tables = pivot(cur.fetchall(), weeks, totals)
         cur.execute(UNMARKED_SQL, (start, end))

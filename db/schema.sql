@@ -126,6 +126,13 @@ CREATE TABLE IF NOT EXISTS presence (
     PRIMARY KEY (person_id, work_date, site_id)
 );
 
+-- Часы из ячейки табеля. Раньше ячейка читалась только как «был/не был»,
+-- а само число выбрасывалось — при том, что в листах стоят настоящие
+-- 11, 12, 10, 9, 8, и по ним считают «Total hours».
+-- NULL означает «был, но часы не разобрались»: присутствие важнее числа,
+-- и одна кривая ячейка не должна стирать факт выхода на работу.
+ALTER TABLE presence ADD COLUMN IF NOT EXISTS hours numeric(5,2);
+
 CREATE INDEX IF NOT EXISTS presence_date_idx ON presence (work_date);
 CREATE INDEX IF NOT EXISTS presence_site_date_idx ON presence (site_id, work_date);
 

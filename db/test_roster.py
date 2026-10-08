@@ -234,7 +234,7 @@ def test_person_ids_read_after_upsert_before_presence():
 def test_param_counts_match_sql_placeholders():
     """Рассинхрон числа подстановок — отказ на первом же реальном прогоне."""
     _, db, _ = run()
-    expected = {"site": 2, "person": 5, "presence": 4, "carpool": 4}
+    expected = {"site": 2, "person": 5, "presence": 5, "carpool": 4}
     for kind, sql, seq in db.log:
         if kind != "executemany":
             continue
@@ -247,7 +247,7 @@ def test_param_counts_match_sql_placeholders():
 def test_presence_carries_person_id_not_name():
     _, db, _ = run()
     ids = set(range(1, len(db.tables["person"]) + 1))
-    for person_id, _work_date, _site, source in db.tables["presence"].values():
+    for person_id, _work_date, _site, source, _hours in db.tables["presence"].values():
         assert person_id in ids, f"presence ссылается на {person_id!r}"
         assert source == "timesheet"
 
