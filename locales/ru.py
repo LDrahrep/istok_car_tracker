@@ -12,7 +12,7 @@ STRINGS = {
     'shift.meltech_night': '🔧🌙 Meltech ночь',
     'card.seats_free': 'свободно {free} из {total}',
     'card.seats_full': 'мест нет',
-    'card.no_contact': f'контакта нет — спроси у {_ADMIN}',
+    'card.no_contact': 'контакта нет',
     # ===== Роли, помощь, открепление =====
     'leave.error': f'❌ Не получилось открепить. Попробуй ещё раз или напиши {_ADMIN}.',    'btn.leave_carpool': '🚶 Я больше не еду с водителем',
     'btn.help': '❓ Помощь',
