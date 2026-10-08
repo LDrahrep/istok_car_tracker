@@ -63,6 +63,19 @@ US_STATE_NAMES = {
 }
 
 
+def _delta(n: int) -> str:
+    """Изменение со знаком: «+21», «−4», «без изменений».
+
+    Раньше знак приклеивался шаблоном, и удаление строк печаталось как
+    «+-4» — выглядит как опечатка, а не как осмысленный результат.
+    """
+    if n > 0:
+        return f"+{n}"
+    if n < 0:
+        return f"−{abs(n)}"
+    return "без изменений"
+
+
 def _means_skip(text: str) -> bool:
     """Человек хотел пропустить шаг, но попал не точно в подпись кнопки.
 
@@ -1834,10 +1847,11 @@ class BotHandlers:
             f"✅ {label} — готово",
             "",
             f"Табелей прочитано: {info['sheets']}",
-            f"Объектов: {info['sites_total']} (+{info['sites_new']})",
-            f"Людей: {info['people_total']} (+{info['people_new']}), "
+            f"Объектов: {info['sites_total']} ({_delta(info['sites_new'])})",
+            f"Людей: {info['people_total']} ({_delta(info['people_new'])}), "
             f"в прогоне {info['people_seen']}",
-            f"Присутствие: {info['presence_total']} (+{info['presence_new']}) "
+            f"Присутствие: {info['presence_total']} "
+            f"({_delta(info['presence_new'])}) "
             f"из {info['presence_read']} прочитанных",
             f"Связей водитель↔пассажир: {info['carpool_total']} "
             f"(собрано {info['carpool_built']})",

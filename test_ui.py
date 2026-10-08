@@ -408,3 +408,12 @@ def test_real_input_is_not_mistaken_for_skip():
     assert not _means_skip("+1 718 715 2475")
     assert not _means_skip("Ivan Ivanov")
     assert not _means_skip("")
+
+
+def test_delta_sign_is_readable():
+    """«+-4» выглядит как опечатка, а не как удаление четырёх строк."""
+    from handlers import _delta
+
+    assert _delta(21) == "+21"
+    assert _delta(-4) == "−4"
+    assert _delta(0) == "без изменений"
