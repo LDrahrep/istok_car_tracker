@@ -329,18 +329,23 @@ def build_app():
 
     app.add_handler(CommandHandler("broadcast_keyboard", handlers.broadcast_keyboard))
     app.add_handler(CommandHandler("report", handlers.report_command))
-    app.add_handler(CommandHandler("db_status", handlers.db_status_command))
-    app.add_handler(CommandHandler("db_capture", handlers.db_capture_command))
-    app.add_handler(CommandHandler("db_backfill", handlers.db_backfill_command))
-    app.add_handler(CommandHandler("db_import", handlers.db_import_command))
-    app.add_handler(CommandHandler("db_export", handlers.db_export_command))
-    app.add_handler(CommandHandler("db_merge", handlers.db_merge_command))
-    app.add_handler(CommandHandler("db_sheets", handlers.db_sheets_command))
-    app.add_handler(CommandHandler("db_site_rename", handlers.db_site_rename_command))
-    app.add_handler(CommandHandler("db_report", handlers.db_report_command))
-    app.add_handler(CommandHandler("db_stale", handlers.db_stale_command))
-    app.add_handler(CommandHandler("db_restore", handlers.db_restore_command))
-    app.add_handler(CommandHandler("db_diff", handlers.db_diff_command))
+    # block=False: эти команды ходят в Google и в Postgres и живут секунды,
+    # а то и минуты. PTB по умолчанию обрабатывает апдейты ПОСЛЕДОВАТЕЛЬНО —
+    # и пока админ собирал снимок на 291 водителя, бот не отвечал никому.
+    # Пользовательские сценарии остаются последовательными: там важен
+    # порядок шагов диалога.
+    app.add_handler(CommandHandler("db_status", handlers.db_status_command, block=False))
+    app.add_handler(CommandHandler("db_capture", handlers.db_capture_command, block=False))
+    app.add_handler(CommandHandler("db_backfill", handlers.db_backfill_command, block=False))
+    app.add_handler(CommandHandler("db_import", handlers.db_import_command, block=False))
+    app.add_handler(CommandHandler("db_export", handlers.db_export_command, block=False))
+    app.add_handler(CommandHandler("db_merge", handlers.db_merge_command, block=False))
+    app.add_handler(CommandHandler("db_sheets", handlers.db_sheets_command, block=False))
+    app.add_handler(CommandHandler("db_site_rename", handlers.db_site_rename_command, block=False))
+    app.add_handler(CommandHandler("db_report", handlers.db_report_command, block=False))
+    app.add_handler(CommandHandler("db_stale", handlers.db_stale_command, block=False))
+    app.add_handler(CommandHandler("db_restore", handlers.db_restore_command, block=False))
+    app.add_handler(CommandHandler("db_diff", handlers.db_diff_command, block=False))
     app.add_handler(CommandHandler("english", handlers.set_language_english))
     app.add_handler(CommandHandler("russian", handlers.set_language_russian))
 

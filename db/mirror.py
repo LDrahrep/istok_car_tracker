@@ -163,15 +163,17 @@ def compare(sheets, sheet_name: str, *, day: Optional[date] = None) -> dict:
 
 
 def rebuild_day(day: Optional[date] = None) -> dict:
-    """Пересобрать связи за день из снимка.
+    """Пересобрать связи за день из снимка — одним соединением.
 
-    Нужно потому, что снимок и связи — разные слои: `/db_capture` пишет
-    в `carpool_snapshot`, а сверка и сводки смотрят в `carpool`. Без этого
-    шага свежий снимок есть, а связей за день нет, и сверка показывает
-    пустую базу при полной таблице.
+    Первая версия звала sync_carpool в цикле по водителям, а тот открывает
+    соединение на каждый вызов: на 291 водителе это 291 подключение подряд,
+    и команда висела минутами. Зеркало рассчитано на ОДНО изменение от
+    человека; для пачки нужен пакетный путь.
 
-    Переиспользует тот же путь, что и зеркало: один код — одно поведение.
+    Удаляются только строки источника 'snapshot': то, что зеркало записало
+    позже снимка, свежее — ON CONFLICT DO NOTHING оставит его на месте.
     """
+    from .importer import build_carpool, name_key
     from .capture import today_in_business_tz
     from .store import _connect, enabled
 
@@ -179,16 +181,55 @@ def rebuild_day(day: Optional[date] = None) -> dict:
         return {"enabled": False}
     day = day or today_in_business_tz()
 
-    with _connect() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT telegram_id, driver_name, passengers FROM carpool_snapshot"
-            " WHERE snapshot_date = %s", (day,),
-        )
-        rows = cur.fetchall()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT snapshot_date, telegram_id, driver_name, passengers"
+                " FROM carpool_snapshot WHERE snapshot_date = %s", (day,),
+            )
+            snapshots = cur.fetchall()
+            if not snapshots:
+                return {"enabled": True, "day": day, "drivers": 0, "written": 0}
 
-    written = 0
-    for tg_id, driver_name, passengers in rows:
-        res = sync_carpool(int(tg_id), driver_name or "", passengers or [],
-                           day=day, source="snapshot")
-        written += res.get("written", 0)
-    return {"enabled": True, "day": day, "drivers": len(rows), "written": written}
+            # Заводим всех разом: водителей и пассажиров, одним executemany,
+            # а не отдельной вставкой на каждое имя.
+            names: dict[str, str] = {}
+            for _, _, driver_name, passengers in snapshots:
+                for raw in [driver_name, *(passengers or [])]:
+                    key = name_key(raw or "")
+                    if key:
+                        names.setdefault(key, (raw or "").strip())
+            cur.executemany(
+                "INSERT INTO person (full_name, name_key, shift)"
+                " VALUES (%s, %s, 'unknown') ON CONFLICT (name_key) DO NOTHING",
+                [(full, key) for key, full in names.items()],
+            )
+
+            cur.execute("SELECT name_key, id FROM person")
+            by_key = dict(cur.fetchall())
+            cur.execute(
+                "SELECT telegram_id, id FROM person WHERE telegram_id IS NOT NULL"
+            )
+            by_tgid = dict(cur.fetchall())
+
+            links, problems = build_carpool(snapshots, by_key, by_tgid)
+
+            cur.execute(
+                "DELETE FROM carpool WHERE ride_date = %s AND source = 'snapshot'",
+                (day,),
+            )
+            cur.executemany(
+                "INSERT INTO carpool (ride_date, driver_id, passenger_id, seat,"
+                " source) VALUES (%s, %s, %s, %s, 'snapshot')"
+                " ON CONFLICT DO NOTHING",
+                [(l.ride_date, l.driver_id, l.passenger_id, l.seat) for l in links],
+            )
+            cur.execute(
+                "SELECT count(*) FROM carpool WHERE ride_date = %s", (day,)
+            )
+            total = cur.fetchone()[0]
+        conn.commit()
+
+    return {"enabled": True, "day": day, "drivers": len(snapshots),
+            "written": len(links), "total": total,
+            "unresolved": sum(len(v) for v in problems.values())}
