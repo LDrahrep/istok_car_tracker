@@ -14,6 +14,7 @@ from config import Buttons
 from i18n import t, button, set_user_lang, is_button
 from intent import parse_yes_no_intent
 from models import Driver, DriverPassengers, Reason, ShiftType, normalize_text
+from phones import normalize as normalize_phone
 from persistence import get_state_manager
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,24 @@ US_STATE_NAMES = {
     "wisconsin": "WI", "wyoming": "WY", "district of columbia": "DC",
     "washington dc": "DC", "washington d.c.": "DC",
 }
+
+
+def _means_skip(text: str) -> bool:
+    """Человек хотел пропустить шаг, но попал не точно в подпись кнопки.
+
+    В живых данных двое так и записались телефоном: один написал
+    «Пропустить» словом, вторая отправила «⏭️» — с селектором варианта,
+    тогда как в кнопке «⏭» без него. Для строкового сравнения это разные
+    значения, и сравнение с подписью кнопки отсекало тех, кто сделал
+    почти правильно.
+    """
+    if is_button(text, "btn.skip"):
+        return True
+    cleaned = "".join(ch for ch in (text or "") if ch.isalpha()).casefold()
+    if cleaned in ("пропустить", "пропуск", "skip"):
+        return True
+    # Одни лишь значки без букв и цифр — тоже попытка нажать кнопку.
+    return bool(text) and not any(ch.isalnum() for ch in text)
 
 
 class BotHandlers:
@@ -397,8 +416,23 @@ class BotHandlers:
         """
         tg_id = update.effective_user.id
         raw = (update.effective_message.text or "").strip()
-        skipped = is_button(raw, "btn.skip")
-        phone = "" if skipped else raw
+        skipped = _means_skip(raw)
+        if skipped:
+            phone = ""
+        else:
+            phone = normalize_phone(raw) or ""
+            if not phone:
+                # Не сохраняем молча: иначе человек уверен, что оставил
+                # контакт, а в карточке его нет.
+                await self._reply(
+                    update,
+                    t("driver.phone_invalid", tg_id=tg_id),
+                    reply_markup=ReplyKeyboardMarkup(
+                        [[button("btn.skip", tg_id)]],
+                        resize_keyboard=True, one_time_keyboard=True,
+                    ),
+                )
+                return ST_DRIVER_PHONE
 
         city = context.user_data.get("driver_city", "")
         state = context.user_data.get("driver_state", "")
@@ -1441,8 +1475,12 @@ class BotHandlers:
         contact = []
         if d.username:
             contact.append(f"t.me/{d.username}")
-        if d.phone:
-            contact.append(f"📞 {d.phone}")
+        # Колонку телефона заполняют руками, и туда попадает что угодно —
+        # у одного водителя там оказался список пассажиров. Показываем
+        # только то, что разобралось как номер.
+        phone = normalize_phone(d.phone)
+        if phone:
+            contact.append(f"📞 {phone}")
         parts.append(" · ".join(contact) if contact
                      else t("card.no_contact", tg_id=viewer_id))
         return "\n".join(parts)

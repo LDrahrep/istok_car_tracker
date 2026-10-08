@@ -173,9 +173,22 @@ def test_card_without_contact_says_so():
 
 
 def test_card_phone_shown_when_given():
+    """Номер приводится к единому виду, как бы его ни записали в таблице."""
     card = _card(username="", phone="+1 408 555 0101", taken=1)
-    assert "📞 +1 408 555 0101" in card
+    assert "📞 (408) 555-0101" in card
     assert "контакта нет" not in card
+
+
+def test_card_hides_garbage_in_the_phone_column():
+    """Реальный случай: в поле телефона оказался список пассажиров.
+
+    Бот показывал его в карточке после значка телефона. Теперь такое
+    поле считается пустым — лучше «контакта нет», чем чужие фамилии
+    под видом номера.
+    """
+    card = _card(username="", phone="ПАССАЖИРЫ. SHARAFJON YULDOSHEV ISLAM", taken=1)
+    assert "📞" not in card
+    assert "контакта нет" in card
 
 
 def test_card_without_seat_data_omits_seats():
@@ -368,3 +381,30 @@ def test_menu_switches_right_after_quitting_as_driver():
     assert ru.STRINGS["btn.add_passengers"] not in texts, "меню осталось водительским"
     assert ru.STRINGS["btn.stop_being_driver"] not in texts
     assert ru.STRINGS["btn.become_driver"] in texts
+
+
+# ──────────────── «Пропустить» мимо кнопки ────────────────
+
+def test_skip_recognised_when_typed_or_emoji_differs():
+    """Двое реально записались телефоном, промахнувшись мимо кнопки.
+
+    Один написал «Пропустить» словом, вторая отправила «⏭️» — с
+    селектором варианта, тогда как в кнопке «⏭» без него.
+    """
+    from handlers import _means_skip
+
+    assert _means_skip(ru.STRINGS["btn.skip"])
+    assert _means_skip("Пропустить")
+    assert _means_skip("пропустить")
+    assert _means_skip("skip")
+    assert _means_skip("⏭️")
+    assert _means_skip("⏭")
+
+
+def test_real_input_is_not_mistaken_for_skip():
+    from handlers import _means_skip
+
+    assert not _means_skip("7187152475")
+    assert not _means_skip("+1 718 715 2475")
+    assert not _means_skip("Ivan Ivanov")
+    assert not _means_skip("")
