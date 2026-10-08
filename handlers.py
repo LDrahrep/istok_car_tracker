@@ -2170,7 +2170,9 @@ class BotHandlers:
         from db import svodka
 
         try:
-            info = await asyncio.to_thread(lambda: svodka.export(self.sheets, start, end, strict=strict))
+            info = await asyncio.to_thread(
+                lambda: svodka.export(self.sheets, start, end, mode=mode)
+            )
         except Exception as e:
             logger.exception("svodka failed")
             await self._reply(update, f"❌ Ошибка: {e}", reply_markup=self.kb_main(uid))
