@@ -157,8 +157,15 @@ def compare(sheets, sheet_name: str, *, day: Optional[date] = None) -> dict:
             db_state.setdefault(int(tg), []).append(passenger)
 
     result = diff_states(sheet_state, db_state)
-    result.update({"enabled": True, "day": day,
-                   "sheet_drivers": len(sheet_state), "db_drivers": len(db_state)})
+    result.update({
+        "enabled": True, "day": day,
+        "sheet_drivers": len(sheet_state), "db_drivers": len(db_state),
+        # За день без снимка в базе нет НИ ОДНОЙ связи, и сверка честно
+        # выдаёт сотни «расхождений». Это не рассогласование, а отсутствие
+        # данных, и путать одно с другим нельзя: в первом случае надо
+        # разбираться, во втором — просто снять снимок.
+        "no_data_for_day": not db_state,
+    })
     return result
 
 

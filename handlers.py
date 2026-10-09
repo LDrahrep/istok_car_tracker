@@ -1944,6 +1944,17 @@ class BotHandlers:
             )
             return
 
+        if info.get("no_data_for_day"):
+            await self._reply(
+                update,
+                f"🔍 Сверка на {info['day']}\n\n"
+                f"За этот день в базе нет ни одной связи — снимка ещё не "
+                f"было, и состав никто не менял.\n\n"
+                f"Сравнивать не с чем. Сделай /db_capture и повтори.",
+                reply_markup=self.kb_main(uid),
+            )
+            return
+
         всего = (len(info["only_sheet"]) + len(info["only_db"])
                  + len(info["differs"]))
         lines = [f"🔍 Сверка на {info['day']}",
