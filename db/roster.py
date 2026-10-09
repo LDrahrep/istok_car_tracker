@@ -90,7 +90,13 @@ ON CONFLICT (name_key) DO UPDATE SET
 CARPOOL_INSERT = """
 INSERT INTO carpool (ride_date, driver_id, passenger_id, seat, source)
 VALUES (%s, %s, %s, %s, 'snapshot')
-ON CONFLICT (ride_date, passenger_id) DO NOTHING
+-- Голое ON CONFLICT, без указания ключа: у carpool ДВА уникальных
+-- ограничения — carpool_pk (дата, пассажир) и carpool_seat_uniq
+-- (дата, водитель, место). Названный ключ покрывает только одно, и
+-- нарушение второго вылетает наружу. Так и случилось: импорт удаляет
+-- только строки source='snapshot', строка от зеркала с тем же местом
+-- остаётся, и вставка попадает на занятое место, а не на дубль пассажира.
+ON CONFLICT DO NOTHING
 """
 
 # Прочитанный лист перезаписывает свой диапазон целиком. Без этого импорт

@@ -387,3 +387,25 @@ def test_sheet_range_is_cleared_before_writing():
     steps = db.steps()
     assert "clear_presence" in steps
     assert steps.index("clear_presence") < steps.index("many:presence")
+
+
+def test_carpool_inserts_guard_every_unique_constraint():
+    """У carpool два уникальных ограничения, а не одно.
+
+    carpool_pk (дата, пассажир) и carpool_seat_uniq (дата, водитель,
+    место). ON CONFLICT с НАЗВАННЫМ ключом покрывает только его, и
+    нарушение второго вылетает наружу — /db_import так и упал:
+    «duplicate key value violates unique constraint carpool_seat_uniq».
+    """
+    import re
+    from pathlib import Path
+
+    корень = Path(__file__).parent
+    for файл in ("roster.py", "mirror.py"):
+        текст = (корень / файл).read_text(encoding="utf-8")
+        for вставка in re.findall(
+                r"INSERT INTO carpool\b.*?(?=\"\"\"|,\s*\n\s*\[)", текст, re.S):
+            assert "ON CONFLICT DO NOTHING" in вставка, (
+                f"{файл}: вставка в carpool с названным ключом — "
+                "второе ограничение окажется незакрытым"
+            )
