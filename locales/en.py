@@ -101,7 +101,7 @@ STRINGS = {
     # Passenger-specific warnings
     "passenger_warning.not_found": "• {name}: employee not added yet.",
     "passenger_warning.not_found_suggest": "• {name}: employee not added yet. Did you mean: {suggestions}",
-    "passenger_warning.wrong_shift": "• {name}: employee is on a different shift.",
+    "passenger_warning.wrong_shift": "• {name}: different shift (yours {driver_shift}, theirs {passenger_shift}).",
     "passenger_warning.already_with_driver": "• {name}: already rides with driver {driver}.",
     "passenger_warning.self": "🙃 A driver cannot be their own passenger — this entry was skipped.\nIf you're no longer a driver, press \"🛑 Stop being a driver\", then someone can add you as a passenger.",
     "validate.not_a_driver": "⛔ You're not registered as a driver.",

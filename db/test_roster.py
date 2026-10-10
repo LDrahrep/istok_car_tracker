@@ -197,6 +197,10 @@ class FakeSheets:
                     ["1", "Aldar Rakshaev", "", "8.0", "", "", "", "", ""]]
         return []
 
+    def employees_from_sheet(self):
+        """Импорт обязан звать именно этот метод — строго лист, мимо базы."""
+        return self.get_all_employees()
+
     def get_all_employees(self):
         return [SimpleNamespace(name="Aldar Rakshaev", shift="Day"),
                 SimpleNamespace(name="Aldar Rakshaeff", shift="Day"),

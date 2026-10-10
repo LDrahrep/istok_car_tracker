@@ -150,3 +150,30 @@ def test_nobody_added_when_all_rejected():
     assert not valid
     assert codes(errors) == ["validate.nobody_added"]
     assert codes(warnings) == ["passenger_warning.wrong_shift"]
+
+
+def test_wrong_shift_reason_carries_both_shifts():
+    """«В другой смене» без указания смен не объясняет отказ.
+
+    Админ не видит, чья сторона устарела. Живой случай: Артур Альтерман
+    перешёл на дневную, бот двое суток отказывал «в другой смене», и
+    понять причину по сообщению было невозможно.
+    """
+    emps = [Employee(name="Night Guy", shift="Night")]
+    _, _, warnings = mgr(employees=emps).validate_passengers(111, ["Night Guy"])
+
+    (причина,) = warnings
+    assert причина.code == "passenger_warning.wrong_shift"
+    assert причина.params["driver_shift"] == "day"
+    assert причина.params["passenger_shift"] == "night"
+
+
+def test_wrong_shift_message_renders_without_leftover_braces():
+    """Нехватка подстановки заставляет t() вернуть шаблон как есть —
+    и в чат уезжает «{driver_shift}». Проверяем, что все заполнены."""
+    from locales import ru
+
+    emps = [Employee(name="Night Guy", shift="Night")]
+    _, _, warnings = mgr(employees=emps).validate_passengers(111, ["Night Guy"])
+    текст = ru.STRINGS[warnings[0].code].format(**warnings[0].params)
+    assert "{" not in текст

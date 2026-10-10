@@ -204,7 +204,9 @@ def import_roster(sheets, *, drivers_sheet: str,
                 if site and day:
                     covered.append((site, day))
 
-    employees = [(e.name, e.shift) for e in sheets.get_all_employees() if e.name]
+    # Строго из листа: get_all_employees() с включённым USE_DB_READS вернул бы
+    # данные из БД, и импорт скормил бы базе её же содержимое.
+    employees = [(e.name, e.shift) for e in sheets.employees_from_sheet() if e.name]
     tgids = _driver_tgids(sheets, drivers_sheet)
 
     people = build_people(employees, tgids, presence_rows)

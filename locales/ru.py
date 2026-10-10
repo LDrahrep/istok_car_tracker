@@ -101,7 +101,7 @@ STRINGS = {
     # Пассажир-специфичные предупреждения
     "passenger_warning.not_found": "• {name}: сотрудника ещё не добавили.",
     "passenger_warning.not_found_suggest": "• {name}: сотрудника ещё не добавили. Возможно, ты имел в виду: {suggestions}",
-    "passenger_warning.wrong_shift": "• {name}: сотрудник в другой смене.",
+    "passenger_warning.wrong_shift": "• {name}: сотрудник в другой смене (у тебя {driver_shift}, у него {passenger_shift}).",
     "passenger_warning.already_with_driver": "• {name}: уже ездит с водителем {driver}.",
     "passenger_warning.self": "🙃 Водитель не может быть пассажиром — этот пункт пропущен.\nЕсли ты больше не водитель, нажми «🛑 Перестать быть водителем», и тогда тебя смогут добавить пассажиром.",
     "validate.not_a_driver": "⛔ Ты не зарегистрирован как водитель.",

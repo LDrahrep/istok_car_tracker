@@ -294,7 +294,9 @@ def test_reason_renders_in_the_readers_language():
     """Ровно то, что чинили: ответ не должен быть на двух языках сразу."""
     from models import Reason
 
-    line, = _render([Reason("passenger_warning.wrong_shift", {"name": "Ivan"})], "en")
+    line, = _render([Reason("passenger_warning.wrong_shift",
+                            {"name": "Ivan", "driver_shift": "day",
+                             "passenger_shift": "night"})], "en")
     assert "Ivan" in line
     assert not re.search(r"[а-яё]", line, re.I), f"русский в английском ответе: {line}"
 
@@ -302,7 +304,9 @@ def test_reason_renders_in_the_readers_language():
 def test_same_reason_in_russian():
     from models import Reason
 
-    line, = _render([Reason("passenger_warning.wrong_shift", {"name": "Иван"})], "ru")
+    line, = _render([Reason("passenger_warning.wrong_shift",
+                            {"name": "Иван", "driver_shift": "day",
+                             "passenger_shift": "night"})], "ru")
     assert "другой смене" in line
 
 

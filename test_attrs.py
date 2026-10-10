@@ -69,3 +69,30 @@ def test_every_self_attribute_exists():
         if missing:
             problems.append(f"{file_name}:{cls.name} → {missing}")
     assert not problems, "обращение к несуществующим атрибутам: " + "; ".join(problems)
+
+
+def test_import_never_reads_employees_through_the_db_path():
+    """Импорт обязан брать справочник из ЛИСТА, а не из базы.
+
+    get_all_employees() с включённым USE_DB_READS возвращает данные из
+    БД. Если импорт возьмёт справочник оттуда, он скормит базе её же
+    содержимое: синхронизация будет честно отрабатывать каждый час и
+    не менять ничего, а правки в таблице не дойдут до бота вовсе.
+
+    Именно это и случилось 08.10 — Артур Альтерман перешёл на дневную
+    смену, в employees её поправили, а бот двое суток отказывал ему
+    «сотрудник в другой смене».
+    """
+    import ast
+
+    tree = ast.parse((ROOT / "db" / "roster.py").read_text(encoding="utf-8"))
+    вызовы = {
+        node.func.attr for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    source = "\n".join(вызовы)  # только реальные вызовы, без комментариев
+    assert "get_all_employees" not in вызовы, (
+        "импорт читает справочник через путь бота — он замкнётся сам на себя; "
+        "нужен employees_from_sheet()"
+    )
+    assert "employees_from_sheet" in вызовы

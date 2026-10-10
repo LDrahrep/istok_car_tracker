@@ -148,10 +148,16 @@ class SheetManager:
     # =========================
 
     def get_all_employees(self) -> list[Employee]:
-        """Справочник сотрудников: из БД, если включено, иначе из листа.
+        """Справочник для РАБОТЫ бота: из БД, если включено, иначе из листа.
 
         Откат на Sheets при любой неудаче — чтение из базы не должно
         становиться единственной точкой отказа, пока переход не завершён.
+
+        НЕ использовать в импорте: он наполняет базу, и если возьмёт
+        справочник отсюда, то скормит ей её же данные. Ровно так и вышло
+        08.10 — синхронизация честно работала каждый час и не меняла
+        ничего, а правки смен в таблице не доходили до бота вовсе.
+        Для импорта есть employees_from_sheet().
         """
         from db import read as db_read
 
@@ -161,6 +167,10 @@ class SheetManager:
                 return from_db
             logger.warning("USE_DB_READS включён, но база не ответила — читаю лист")
 
+        return self.employees_from_sheet()
+
+    def employees_from_sheet(self) -> list[Employee]:
+        """Справочник строго из листа, мимо базы. Источник истины для импорта."""
         values = self._values(self.config.EMPLOYEES_SHEET)
         if not values or len(values) < 2:
             logger.warning("get_all_employees: no data (rows=%d)", len(values) if values else 0)
@@ -787,9 +797,13 @@ class SheetManager:
             # Проверка смены
             p_shift = ShiftType.from_string(emp.shift)
             if p_shift != driver_shift:
-                warnings.append(
-                    Reason("passenger_warning.wrong_shift", {"name": emp.name})
-                )
+                # Называем обе смены: «в другой смене» не даёт админу понять,
+                # чья сторона устарела, и отказ выглядит необъяснимым.
+                warnings.append(Reason("passenger_warning.wrong_shift", {
+                    "name": emp.name,
+                    "driver_shift": driver_shift.value,
+                    "passenger_shift": p_shift.value,
+                }))
                 continue
 
             # --- Двойная роль ---
