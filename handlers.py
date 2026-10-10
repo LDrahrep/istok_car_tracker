@@ -2503,11 +2503,15 @@ class BotHandlers:
                     roster_only=True)
             )
             logger.info("roster sync: %s", info)
-            if self.config.ADMIN_CHAT_ID and info.get("enabled"):
+            # Ежечасная синхронизация не должна слать ежечасные сообщения:
+            # пишем в чат, только когда что-то изменилось.
+            изменилось = info.get("people_new") or info.get("renamed")
+            if self.config.ADMIN_CHAT_ID and info.get("enabled") and изменилось:
                 await context.bot.send_message(
                     chat_id=self.config.ADMIN_CHAT_ID,
                     text=(f"👥 Ростер синхронизирован\n"
-                          f"Людей: {info['people_total']} (+{info['people_new']})"),
+                          f"Людей: {info['people_total']} "
+                          f"({_delta(info['people_new'])})"),
                 )
         except Exception as e:
             logger.exception("roster sync failed")
