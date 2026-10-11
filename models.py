@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -12,6 +13,21 @@ def normalize_text(s: str) -> str:
 
 def normalize_sorted(s: str) -> str:
     return " ".join(sorted(normalize_text(s).split()))
+
+
+def split_passenger_names(text: str) -> list[str]:
+    """Имена пассажиров из сообщения водителя.
+
+    Есть запятая или точка с запятой — делим по ним, а перенос строки считаем
+    пробелом: водители пишут «Mariia Tcyrenzhapova, Bator↵Tcyrenzhapov», и
+    перенос посреди имени не должен его разрезать. Иначе — по строке на имя.
+    """
+    text = text or ""
+    if re.search(r"[,;]", text):
+        parts = re.split(r"[,;]", text)
+    else:
+        parts = text.splitlines()
+    return [" ".join(p.split()) for p in parts if p.strip()]
 
 
 def normalize_shift(raw: str) -> str:

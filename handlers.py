@@ -13,7 +13,8 @@ from telegram.ext import ContextTypes, ConversationHandler
 from config import Buttons
 from i18n import t, button, set_user_lang, is_button
 from intent import parse_yes_no_intent
-from models import Driver, DriverPassengers, Reason, ShiftType, normalize_text
+from models import (Driver, DriverPassengers, Reason, ShiftType, normalize_text,
+                    split_passenger_names)
 from phones import normalize as normalize_phone
 from persistence import get_state_manager
 
@@ -682,11 +683,7 @@ class BotHandlers:
 
     async def add_passengers_input(self, update, context):
         tg_id = update.effective_user.id
-        names = [
-            x.strip()
-            for x in update.effective_message.text.splitlines()
-            if x.strip()
-        ]
+        names = split_passenger_names(update.effective_message.text)
 
         valid, errors, warnings = self.sheets.validate_passengers(tg_id, names)
 
