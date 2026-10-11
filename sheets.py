@@ -237,6 +237,14 @@ class SheetManager:
         return None
 
     def get_shift_for_tgid(self, tg_id: int) -> ShiftType:
+        # Смена водителя — из drivers, как в validate_passengers. Справочник
+        # из базы знает DriverTGID только по сегодняшним поездкам: утром их
+        # нет, и рассылка по смене уходила 0 водителям.
+        driver = self.get_driver(tg_id)
+        if driver:
+            shift = ShiftType.from_string(driver.shift)
+            if shift != ShiftType.UNKNOWN:
+                return shift
         emp = self.get_employee_by_tgid(tg_id)
         return ShiftType.from_string(emp.shift if emp else "")
 

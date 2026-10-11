@@ -10,7 +10,7 @@ SheetManager, методам доступа к таблицам подставл
 """
 from __future__ import annotations
 
-from models import Driver, Employee, Reason
+from models import Driver, Employee, Reason, ShiftType
 from sheets import SheetManager
 
 DRIVER = Driver(name="Aldar Rakshaev", tg_id=111, shift="Day")
@@ -177,3 +177,23 @@ def test_wrong_shift_message_renders_without_leftover_braces():
     _, _, warnings = mgr(employees=emps).validate_passengers(111, ["Night Guy"])
     текст = ru.STRINGS[warnings[0].code].format(**warnings[0].params)
     assert "{" not in текст
+
+
+# ─────────────────── смена водителя по telegramID ───────────────────
+# 11.10 рассылка проверки Day ушла 0 водителям. Справочник из базы берёт
+# DriverTGID только из сегодняшних поездок, а утром их ещё нет; самому
+# водителю такой записи в базе нет никогда.
+
+def test_driver_shift_found_without_todays_rides():
+    m = mgr(employees=[Employee(name="Aldar Rakshaev", shift="Day")])
+    assert m.get_shift_for_tgid(111) == ShiftType.DAY
+
+
+def test_driver_shift_falls_back_to_employees_when_drivers_blank():
+    d = Driver(name="Aldar Rakshaev", tg_id=111, shift="")
+    emps = [Employee(name="Passenger One", shift="Night", tg_id=111)]
+    assert mgr(driver=d, employees=emps).get_shift_for_tgid(111) == ShiftType.NIGHT
+
+
+def test_unknown_driver_has_unknown_shift():
+    assert mgr(driver=None, employees=[]).get_shift_for_tgid(999) == ShiftType.UNKNOWN
