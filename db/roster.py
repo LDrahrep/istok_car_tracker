@@ -441,7 +441,7 @@ def merge_people(old_name: str, new_name: str) -> dict:
                 " AND driver_id <> %s"
                 " AND NOT EXISTS (SELECT 1 FROM carpool x WHERE x.ride_date = carpool.ride_date"
                 "   AND x.passenger_id = %s)",
-                (new_id, old_id, new_id),
+                (new_id, old_id, new_id, new_id),
             )
             moved["as_passenger"] = cur.rowcount
 

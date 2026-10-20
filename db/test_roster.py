@@ -413,3 +413,56 @@ def test_carpool_inserts_guard_every_unique_constraint():
                 f"{файл}: вставка в carpool с названным ключом — "
                 "второе ограничение окажется незакрытым"
             )
+
+
+# ───────────────────────── ручное слияние людей ─────────────────────────
+# /db_merge падал всегда: в переносе пассажирских поездок четыре %s, а
+# параметров передавалось три. psycopg отвергает такой запрос целиком.
+
+class _MergeCursor:
+    def __init__(self):
+        self.rowcount = 0
+        self._one = None
+        self._all = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=()):
+        assert sql.count("%s") == len(params), (
+            f"{sql.count('%s')} плейсхолдеров, параметров {len(params)}: {' '.join(sql.split())[:80]}")
+        s = " ".join(sql.split())
+        if s.startswith("SELECT name_key, id, full_name, telegram_id FROM person"):
+            self._all = [("adianov erdni", 1, "Erdni Adianov", None),
+                         ("adyanov erdni", 2, "Erdni Adyanov", None)]
+        elif s.startswith("SELECT count(*)"):
+            self._one = (0,)
+
+    def fetchone(self):
+        return self._one
+
+    def fetchall(self):
+        return self._all
+
+
+class _MergeConn:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def cursor(self):
+        return _MergeCursor()
+
+    def commit(self):
+        pass
+
+
+def test_merge_people_queries_get_all_their_parameters():
+    roster._connect = lambda: _MergeConn()
+    info = roster.merge_people("Erdni Adianov", "Erdni Adyanov")
+    assert info["ok"] is True
