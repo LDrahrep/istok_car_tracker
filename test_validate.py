@@ -94,7 +94,8 @@ def test_driver_cannot_add_himself():
 def test_taken_by_another_driver_names_him():
     """Имя чужого водителя нужно в тексте — иначе непонятно, к кому идти."""
     emps = [Employee(name="Badma Matsakov", shift="Day", rides_with="Petr Petrov")]
-    _, _, warnings = mgr(employees=emps).validate_passengers(111, ["Badma Matsakov"])
+    _, _, warnings = mgr(employees=emps, carpool={"Badma Matsakov": (222, "Petr Petrov")}
+                         ).validate_passengers(111, ["Badma Matsakov"])
     assert codes(warnings) == ["passenger_warning.already_with_driver"]
     assert warnings[0].params["driver"] == "Petr Petrov"
 
@@ -138,7 +139,8 @@ def test_more_than_four_are_cut():
 
 def test_already_assigned_to_me():
     emps = [Employee(name="Badma Matsakov", shift="Day", tg_id=111)]
-    valid, errors, _ = mgr(employees=emps).validate_passengers(111, ["Badma Matsakov"])
+    valid, errors, _ = mgr(employees=emps, carpool={"Badma Matsakov": (111, "Aldar Rakshaev")}
+                           ).validate_passengers(111, ["Badma Matsakov"])
     assert not valid
     assert codes(errors) == ["validate.all_already_yours"]
     assert "Badma Matsakov" in errors[0].params["names"]
@@ -216,3 +218,38 @@ def test_reversed_name_found_in_another_card():
          "Akmal Shah", "Sarboz Gulomaliev", "", ""],
     ]
     assert m.find_driver_for_passenger("Shah Akmal") == (555, "Kurchabekov Alibek")
+
+
+# ─────────── «едет с» в справочнике устарело, карточка — правда ───────────
+# Справочник при USE_DB_READS берёт «едет с» из сегодняшних поездок в базе,
+# а они отстают от карточек: ночная проверка чистит список уже после снимка
+# в 21:05, ручная правка листа не снимает дневные записи бота. 19.10 водители
+# видели пустую «Мою запись» и при добавлении слышали «уже приписаны к тебе»,
+# а Maksim Telkov числился «у Magomed», хотя в его карточке давно не стоял.
+
+def test_stale_link_to_me_does_not_block_readding():
+    emps = [Employee(name="Farhad Yskakov", shift="Day",
+                     rides_with="Aldar Rakshaev", tg_id=111)]
+    valid, errors, warnings = mgr(employees=emps, carpool={}).validate_passengers(
+        111, ["Farhad Yskakov"])
+    assert [e.name for e in valid] == ["Farhad Yskakov"]
+    assert not errors and not warnings
+
+
+def test_stale_link_to_other_driver_does_not_block():
+    emps = [Employee(name="Maksim Telkov", shift="Day",
+                     rides_with="Magomed Tovsultanov", tg_id=222)]
+    valid, _, warnings = mgr(employees=emps, carpool={}).validate_passengers(
+        111, ["Maksim Telkov"])
+    assert [e.name for e in valid] == ["Maksim Telkov"]
+    assert not warnings
+
+
+def test_card_wins_when_directory_names_another_driver():
+    """Справочник отстал в другую сторону: в карточке уже другой водитель."""
+    emps = [Employee(name="Badma Matsakov", shift="Day",
+                     rides_with="Petr Petrov", tg_id=222)]
+    _, _, warnings = mgr(employees=emps, carpool={"Badma Matsakov": (333, "Ivan Sidorov")}
+                         ).validate_passengers(111, ["Badma Matsakov"])
+    assert codes(warnings) == ["passenger_warning.already_with_driver"]
+    assert warnings[0].params["driver"] == "Ivan Sidorov"

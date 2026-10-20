@@ -833,19 +833,22 @@ class SheetManager:
             )
 
             if (rides_with or has_driver_id) and not self_ref:
-                # Приписан к КОМУ-ТО другому (реальному водителю)
-                is_mine = (
-                    (emp.tg_id is not None and int(emp.tg_id) == int(driver_tgid))
-                    or normalize_text(rides_with) == driver_name_norm
-                )
-                if is_mine:
-                    already_assigned.append(emp.name)
-                else:
-                    warnings.append(Reason(
-                        "passenger_warning.already_with_driver",
-                        {"name": emp.name, "driver": rides_with},
-                    ))
-                continue
+                # «Едет с» в справочнике — лишь подсказка: при USE_DB_READS оно
+                # из сегодняшних поездок в базе и отстаёт от карточек (ночная
+                # проверка чистит список после снимка, ручная правка листа не
+                # снимает дневных записей бота). Решает живая карточка.
+                hit = self.find_driver_for_passenger(emp.name)
+                if hit is not None:
+                    other_tgid, other_name = hit
+                    if int(other_tgid) == int(driver_tgid):
+                        already_assigned.append(emp.name)
+                    else:
+                        warnings.append(Reason(
+                            "passenger_warning.already_with_driver",
+                            {"name": emp.name, "driver": other_name},
+                        ))
+                    continue
+                # В карточках его нет — запись устарела, человек свободен.
 
             # X свободен или сам себе водитель. Если это активный водитель со своими
             # пассажирами — брать пассажиром нельзя.
