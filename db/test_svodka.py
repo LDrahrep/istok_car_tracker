@@ -7,7 +7,8 @@ from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from svodka import pivot, sheet_title, week_label, weeks_in  # noqa: E402
+from svodka import (conflict_comments, pivot, sheet_title, week_label,  # noqa: E402
+                    weeks_in)
 
 
 def test_week_label_matches_the_existing_svodka():
@@ -135,3 +136,38 @@ def test_fair_rule_requires_both_conditions():
     sql = svodka.FAIR_SQL
     assert "c2.driver_id <> pr.person_id" in sql, "пассажир не ехал с другим"
     assert ">= 2" in sql, "минимум двое пассажиров на работе"
+
+
+# ─────────── пассажир в двух карточках ───────────
+
+AMONULLO, KURCHABEKOV = 1, 2
+NAMES = {AMONULLO: "Amonullo Jomikov", KURCHABEKOV: "Kurchabekov Alibek"}
+
+
+def test_conflict_named_in_both_drivers_comments():
+    """Конфликт видно у обоих: кому засчитан и у кого ещё стоял."""
+    taken = [(date(2026, 9, d), "Akmal Shah", AMONULLO, KURCHABEKOV) for d in (28, 29, 30)]
+    c = conflict_comments(taken, NAMES)
+
+    assert c["Kurchabekov Alibek"] == (
+        "Akmal Shah 28.09–30.09 также в карточке Amonullo Jomikov, засчитан там")
+    assert c["Amonullo Jomikov"] == (
+        "Akmal Shah 28.09–30.09 также в карточке Kurchabekov Alibek, засчитан здесь")
+
+
+def test_conflict_days_with_a_gap_listed_apart():
+    taken = [(date(2026, 9, 28), "P", AMONULLO, KURCHABEKOV),
+             (date(2026, 9, 30), "P", AMONULLO, KURCHABEKOV)]
+    assert conflict_comments(taken, NAMES)["Kurchabekov Alibek"].startswith("P 28.09, 30.09 ")
+
+
+def test_fifth_passenger_is_not_a_conflict():
+    """Перебор мест build_carpool тоже кладёт в taken, но без второго водителя."""
+    assert conflict_comments([(date(2026, 9, 28), "P", AMONULLO, None)], NAMES) == {}
+
+
+def test_conflict_comment_lands_in_the_comment_column():
+    rows = [("TULANE", "Ivan Ivanov", date(2026, 9, 14), 7)]
+    table = pivot(rows, weeks_in(date(2026, 9, 14), date(2026, 9, 20)),
+                  comments={"Ivan Ivanov": "пометка"})["TULANE"]
+    assert table[1][-1] == "пометка"

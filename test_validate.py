@@ -197,3 +197,22 @@ def test_driver_shift_falls_back_to_employees_when_drivers_blank():
 
 def test_unknown_driver_has_unknown_shift():
     assert mgr(driver=None, employees=[]).get_shift_for_tgid(999) == ShiftType.UNKNOWN
+
+
+# ─────────── чужая карточка, имя с другим порядком слов ───────────
+# 28.09–03.10 Akmal Shah неделю стоял в двух карточках: у Kurchabekov Alibek
+# как «Akmal Shah», у Amonullo Jomikov как «Shah Akmal». Бот сравнивал имена
+# буквально и дубль пропустил, а база отдала пассажира одному из них.
+
+def test_reversed_name_found_in_another_card():
+    from types import SimpleNamespace
+
+    m = SheetManager.__new__(SheetManager)
+    m.config = SimpleNamespace(DRIVERS_PASSENGERS_SHEET="drivers_passengers")
+    m._values = lambda name: [
+        ["Name", "telegramID", "Phone Number", "Shift",
+         "Passenger1", "Passenger2", "Passenger3", "Passenger4"],
+        ["Kurchabekov Alibek", "555", "", "Day",
+         "Akmal Shah", "Sarboz Gulomaliev", "", ""],
+    ]
+    assert m.find_driver_for_passenger("Shah Akmal") == (555, "Kurchabekov Alibek")

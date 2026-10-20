@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Iterable, Optional
 
 logger = logging.getLogger(__name__)
@@ -180,7 +180,7 @@ def rebuild_day(day: Optional[date] = None) -> dict:
     Удаляются только строки источника 'snapshot': то, что зеркало записало
     позже снимка, свежее — ON CONFLICT DO NOTHING оставит его на месте.
     """
-    from .importer import build_carpool, name_key
+    from .importer import HISTORY_DAYS, build_carpool, name_key
     from .capture import today_in_business_tz
     from .store import _connect, enabled
 
@@ -190,11 +190,15 @@ def rebuild_day(day: Optional[date] = None) -> dict:
 
     with _connect() as conn:
         with conn.cursor() as cur:
+            # Прошлые дни нужны правилу «пассажир у того, кто вписал позже»:
+            # по одному дню не видно, кто держит запись неделями.
             cur.execute(
                 "SELECT snapshot_date, telegram_id, driver_name, passengers"
-                " FROM carpool_snapshot WHERE snapshot_date = %s", (day,),
+                " FROM carpool_snapshot WHERE snapshot_date BETWEEN %s AND %s",
+                (day - timedelta(days=HISTORY_DAYS), day),
             )
-            snapshots = cur.fetchall()
+            history = cur.fetchall()
+            snapshots = [s for s in history if s[0] == day]
             if not snapshots:
                 return {"enabled": True, "day": day, "drivers": 0, "written": 0}
 
@@ -238,7 +242,9 @@ def rebuild_day(day: Optional[date] = None) -> dict:
             )
             by_tgid = dict(cur.fetchall())
 
-            links, problems = build_carpool(snapshots, by_key, by_tgid)
+            links, problems = build_carpool(history, by_key, by_tgid)
+            links = [l for l in links if l.ride_date == day]
+            problems = {k: [p for p in v if p[0] == day] for k, v in problems.items()}
 
             cur.execute(
                 "DELETE FROM carpool WHERE ride_date = %s AND source = 'snapshot'",

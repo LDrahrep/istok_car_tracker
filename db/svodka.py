@@ -192,16 +192,56 @@ def _hours(value) -> str:
     return str(int(number)) if number == int(number) else f"{number:.1f}"
 
 
+def _span(days: Iterable[date]) -> str:
+    """«28.09–30.09», а с пропуском — «28.09, 30.09»."""
+    days = sorted(set(days))
+    parts, start, prev = [], days[0], days[0]
+    for d in days[1:]:
+        if (d - prev).days == 1:
+            prev = d
+            continue
+        parts.append((start, prev))
+        start = prev = d
+    parts.append((start, prev))
+    return ", ".join(f"{a:%d.%m}" if a == b else f"{a:%d.%m}–{b:%d.%m}" for a, b in parts)
+
+
+def conflict_comments(taken: Iterable[tuple], names: dict[int, str]) -> dict[str, str]:
+    """Пассажир в двух карточках в один день → пометка у обоих водителей.
+
+    `taken` — то, что build_carpool отложил: (дата, имя, кому засчитан,
+    у кого ещё стоял). Решает спор правило «у того, кто вписал позже», но
+    молча этого делать нельзя: второй водитель теряет пассажира, и причина
+    должна быть видна в сводке. Перебор мест (второго водителя нет) и
+    повтор в собственной карточке — не конфликт.
+    """
+    groups: dict[tuple[str, int, int], list[date]] = {}
+    for ride_date, raw, winner, loser in taken:
+        if loser is None or winner == loser:
+            continue
+        groups.setdefault((raw, winner, loser), []).append(ride_date)
+
+    notes: dict[str, list[str]] = {}
+    for (raw, winner, loser), days in sorted(groups.items(), key=lambda kv: min(kv[1])):
+        span = _span(days)
+        w, l = names.get(winner, str(winner)), names.get(loser, str(loser))
+        notes.setdefault(l, []).append(f"{raw} {span} также в карточке {w}, засчитан там")
+        notes.setdefault(w, []).append(f"{raw} {span} также в карточке {l}, засчитан здесь")
+    return {name: "; ".join(v) for name, v in notes.items()}
+
+
 def pivot(rows: Iterable[tuple], weeks: list[date],
-          totals: Optional[dict[str, tuple[int, int]]] = None) -> dict[str, list[list[str]]]:
+          totals: Optional[dict[str, tuple[int, int]]] = None,
+          comments: Optional[dict[str, str]] = None) -> dict[str, list[list[str]]]:
     """Строки (объект, водитель, неделя, дней) → таблица на каждый объект.
 
     Раскладка повторяет нынешнюю Svodka: имя, по колонке на неделю,
-    пустой «Комментарий» — его заполняют руками, и перезаписывать его
-    выгрузка не должна.
+    «Комментарий». Сама выгрузка пишет туда только конфликты пассажиров
+    (`conflict_comments`), остальное заполняют руками.
     """
     labels = [week_label(w) for w in weeks]
     totals = totals or {}
+    comments = comments or {}
     by_site: dict[str, dict[str, dict[str, int]]] = {}
     for site_id, name, week_start, days in rows:
         by_site.setdefault(site_id, {}).setdefault(name, {})[week_label(week_start)] = days
@@ -214,7 +254,8 @@ def pivot(rows: Iterable[tuple], weeks: list[date],
             cells = drivers[name]
             drove, present, hours = totals.get(name, ("", "", ""))
             table.append([name] + [str(cells.get(l, "")) for l in labels]
-                         + [str(drove), str(present), _hours(hours), ""])
+                         + [str(drove), str(present), _hours(hours),
+                            comments.get(name, "")])
         out[site_id] = table
     return out
 
@@ -252,13 +293,40 @@ def build(start: date, end: date, *, mode: str = "fair") -> dict:
         totals = {name: (drove, present, hours)
                   for name, drove, present, hours in cur.fetchall()}
         cur.execute(sql, params)
-        tables = pivot(cur.fetchall(), weeks, totals)
+        credited = cur.fetchall()
         cur.execute(UNMARKED_SQL, (start, end))
         unmarked = cur.fetchall()
+        conflicts = _conflicts(cur, start, end)
 
     return {"enabled": True, "start": start, "end": end, "mode": mode,
             "weeks": [week_label(w) for w in weeks],
-            "tables": tables, "unmarked": unmarked}
+            "tables": pivot(credited, weeks, totals, conflicts),
+            "unmarked": unmarked, "conflicts": conflicts}
+
+
+def _conflicts(cur, start: date, end: date) -> dict[str, str]:
+    """Пометки о пассажирах, записанных у двух водителей за период.
+
+    Разбор тот же, что у импорта (build_carpool), поэтому пометка совпадает
+    с тем, кому пассажир на самом деле засчитан.
+    """
+    from .importer import HISTORY_DAYS, build_carpool
+
+    cur.execute(
+        "SELECT snapshot_date, telegram_id, driver_name, passengers"
+        " FROM carpool_snapshot WHERE snapshot_date BETWEEN %s AND %s",
+        (start - timedelta(days=HISTORY_DAYS), end),
+    )
+    snapshots = cur.fetchall()
+    cur.execute("SELECT id, name_key, telegram_id, full_name FROM person")
+    people = cur.fetchall()
+    by_key = {key: pid for pid, key, _, _ in people}
+    by_tgid = {tg: pid for pid, _, tg, _ in people if tg is not None}
+    names = {pid: full for pid, _, _, full in people}
+
+    _, bad = build_carpool(snapshots, by_key, by_tgid)
+    return conflict_comments(
+        [t for t in bad["taken"] if start <= t[0] <= end], names)
 
 
 def export(sheets, start: date, end: date, *, mode: str = "fair") -> dict:

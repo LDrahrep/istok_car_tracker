@@ -395,6 +395,51 @@ def test_passenger_with_two_drivers_same_day_is_cut():
     assert len(bad["taken"]) == 1
 
 
+DAY0 = date(2026, 9, 30)  # день перед DAY
+
+
+def test_conflict_goes_to_the_driver_who_added_later():
+    """Пассажир в двух карточках в один день достаётся тому, кто вписал его позже.
+
+    Раньше побеждал меньший telegram_id, то есть случайный водитель.
+    28.09–03.10 у Kurchabekov Alibek неделями стояла старая запись про
+    Akmal Shah, Amonullo Jomikov вписал его сам — и потерял всю неделю.
+    """
+    rows, bad = build_carpool([
+        (DAY0, 111, "Driver One", ["Pass One"]),
+        (DAY, 111, "Driver One", ["Pass One"]),
+        (DAY, 222, "Driver Two", ["Pass One"]),
+    ], KEYS, TGIDS)
+
+    assert [r for r in rows if r.ride_date == DAY] == [CarpoolLink(DAY, D2, P1, 1)]
+    assert bad["taken"] == [(DAY, "Pass One", D2, D1)]
+
+
+def test_added_later_counts_from_the_last_unbroken_stretch():
+    """Убрал и вписал снова — это новое добавление, а не старая запись."""
+    d1, d2, d3 = date(2026, 9, 29), date(2026, 9, 30), date(2026, 10, 1)
+    rows, _ = build_carpool([
+        (d1, 111, "Driver One", ["Pass One"]),
+        (d2, 111, "Driver One", []),
+        (d2, 222, "Driver Two", ["Pass One"]),
+        (d3, 111, "Driver One", ["Pass One"]),
+        (d3, 222, "Driver Two", ["Pass One"]),
+    ], KEYS, TGIDS)
+
+    assert [r for r in rows if r.ride_date == d3] == [CarpoolLink(d3, D1, P1, 1)]
+
+
+def test_driver_who_lost_a_passenger_keeps_the_rest_without_gaps():
+    rows, _ = build_carpool([
+        (DAY0, 111, "Driver One", ["Pass One", "Pass Two"]),
+        (DAY, 111, "Driver One", ["Pass One", "Pass Two"]),
+        (DAY, 222, "Driver Two", ["Pass One"]),
+    ], KEYS, TGIDS)
+
+    assert [r for r in rows if r.ride_date == DAY and r.driver_id == D1] == [
+        CarpoolLink(DAY, D1, P2, 1)]
+
+
 def test_same_passenger_on_different_days_is_fine():
     """Ограничение — на день, а не навсегда: завтра можно ехать с другим."""
     rows, bad = build_carpool([

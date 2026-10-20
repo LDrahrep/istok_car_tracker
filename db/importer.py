@@ -15,6 +15,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from itertools import groupby
 from typing import Iterable, Optional, Sequence
 
 # Суффикс в имени листа-табеля → канонический объект. Опечатки реальны:
@@ -437,6 +438,12 @@ class CarpoolLink:
     seat: int
 
 
+# Сколько дней снимков смотреть назад, чтобы понять, кто вписал пассажира
+# позже. Нужна только непрерывная полоса до спорного дня; двух месяцев
+# с запасом хватает, а весь архив гонять ради одного дня незачем.
+HISTORY_DAYS = 60
+
+
 def build_carpool(
     snapshots: Iterable[tuple],
     person_by_key: dict[str, int],
@@ -457,10 +464,9 @@ def build_carpool(
     """
     rows: list[CarpoolLink] = []
     bad: dict[str, list] = {"driver": [], "passenger": [], "self": [], "taken": []}
-    # (дата, пассажир) → водитель. Второй водитель на ту же пару нарушил бы
-    # первичный ключ и уронил всю пачку, поэтому отсекаем здесь и сообщаем.
-    seen: dict[tuple[date, int], int] = {}
 
+    # Сначала имена → люди, по дням в прежнем порядке (дата, telegram_id).
+    cards: list[tuple[date, int, list[tuple[str, int]]]] = []
     for ride_date, tg_id, driver_name, passengers in sorted(
         snapshots, key=lambda s: (s[0], s[1])
     ):
@@ -473,7 +479,7 @@ def build_carpool(
             bad["driver"].append((ride_date, driver_name))
             continue
 
-        seat = 0
+        resolved = []
         for raw in passengers or []:
             pid = person_by_key.get(name_key(raw))
             if pid is None:
@@ -482,16 +488,57 @@ def build_carpool(
             if pid == driver_id:
                 bad["self"].append((ride_date, driver_name))
                 continue
-            key = (ride_date, pid)
-            if key in seen:
-                bad["taken"].append((ride_date, raw, seen[key], driver_id))
-                continue
-            seat += 1
-            if seat > 4:
-                bad["taken"].append((ride_date, raw, driver_id, None))
-                continue
-            seen[key] = driver_id
-            rows.append(CarpoolLink(ride_date, driver_id, pid, seat))
+            resolved.append((raw, pid))
+        cards.append((ride_date, driver_id, resolved))
+
+    # С какого дня пассажир стоит в карточке водителя без перерыва. Нужно,
+    # чтобы решить спор, когда он записан у двух водителей в один день.
+    since: dict[tuple[date, int, int], date] = {}
+    previous: dict[int, dict[int, date]] = {}  # карточка на прошлую дату водителя
+    current: dict[int, tuple[date, dict[int, date]]] = {}
+    for ride_date, driver_id, resolved in cards:
+        day, card = current.get(driver_id, (None, {}))
+        if day != ride_date:
+            if day is not None:
+                previous[driver_id] = card
+            card = {}
+            current[driver_id] = (ride_date, card)
+        before = previous.get(driver_id, {})
+        for _, pid in resolved:
+            card[pid] = since[(ride_date, driver_id, pid)] = before.get(pid, ride_date)
+
+    # (дата, пассажир) → водитель. Второй водитель на ту же пару нарушил бы
+    # первичный ключ и уронил всю пачку, поэтому решаем здесь и сообщаем.
+    # Достаётся тому, кто вписал позже: старая запись остаётся от водителя,
+    # который больше его не возит, а новую человек сделал сам. При равенстве
+    # прежний порядок — первый по telegram_id.
+    seen: dict[tuple[date, int], int] = {}
+    for ride_date, day_cards in groupby(cards, key=lambda c: c[0]):
+        day_cards = list(day_cards)
+        claims: dict[int, list[int]] = {}
+        for _, driver_id, resolved in day_cards:
+            for _, pid in resolved:
+                drivers = claims.setdefault(pid, [])
+                if driver_id not in drivers:
+                    drivers.append(driver_id)
+        owner = {
+            pid: max(drivers, key=lambda d: (since[(ride_date, d, pid)], -drivers.index(d)))
+            for pid, drivers in claims.items()
+        }
+
+        for _, driver_id, resolved in day_cards:
+            seat = 0
+            for raw, pid in resolved:
+                key = (ride_date, pid)
+                if owner[pid] != driver_id or key in seen:
+                    bad["taken"].append((ride_date, raw, seen.get(key, owner[pid]), driver_id))
+                    continue
+                seat += 1
+                if seat > 4:
+                    bad["taken"].append((ride_date, raw, driver_id, None))
+                    continue
+                seen[key] = driver_id
+                rows.append(CarpoolLink(ride_date, driver_id, pid, seat))
 
     return rows, bad
 

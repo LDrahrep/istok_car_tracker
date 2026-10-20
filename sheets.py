@@ -628,11 +628,13 @@ class SheetManager:
         """Найти водителя, у которого указанный сотрудник записан пассажиром.
 
         В таблице drivers_passengers пассажиры хранятся по имени (Passenger1..Passenger4),
-        поэтому ищем по нормализованному имени.
+        поэтому ищем по нормализованному имени. Порядок слов не важен, как
+        и в базе (`name_key`): «Akmal Shah» в чужой карточке и «Shah Akmal»
+        в запросе — один человек, и пропустить его значит записать дубль.
 
         Возвращает (driver_tgid, driver_name) или None.
         """
-        n = normalize_text(passenger_name)
+        n = normalize_sorted(passenger_name)
         if not n:
             return None
 
@@ -657,7 +659,7 @@ class SheetManager:
             for pc in passenger_cols:
                 if pc is None or pc >= len(row):
                     continue
-                if normalize_text(row[pc]) == n:
+                if normalize_sorted(row[pc]) == n:
                     hit = True
                     break
             if not hit:
