@@ -385,10 +385,29 @@ def build_app():
 
         app.job_queue.run_daily(
             handlers.db_capture_job,
-            time=_dt.time(hour=21, minute=5, tzinfo=CAPTURE_TZ),
+            time=store.CAPTURE_AT.replace(tzinfo=CAPTURE_TZ),
             name="daily_carpool_snapshot",
         )
-        logger.info("Ежедневный захват снапшотов включён (21:05 %s)", CAPTURE_TZ)
+        logger.info("Ежедневный захват снапшотов включён (%s %s)",
+                    store.CAPTURE_AT.strftime("%H:%M"), CAPTURE_TZ)
+        # Задача по расписанию пропущенный запуск не догоняет: выкладка
+        # около 21:05 оставила бы день без снимка. Проверяем после старта.
+        app.job_queue.run_once(
+            handlers.db_capture_catchup,
+            when=_dt.timedelta(seconds=90),
+            name="carpool_snapshot_catchup",
+        )
+
+        # Журнал карточек раз в час: снимок 21:05 видит одну фотографию
+        # в сутки, а по решению 24.10 за день засчитан любой час. За три
+        # минуты до синхронизации ростера — она и пересобирает поездки.
+        app.job_queue.run_repeating(
+            handlers.db_card_log_job,
+            interval=_dt.timedelta(hours=1),
+            first=_dt.timedelta(minutes=2),
+            name="hourly_card_log",
+        )
+        logger.info("Журнал карточек включён (каждый час)")
 
         # Ростер синхронизируется ДО снимка: HR меняет смены и добавляет
         # людей каждый день, и снимок должен ложиться на свежие имена.

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -36,6 +36,21 @@ ON CONFLICT (telegram_id, snapshot_date) DO UPDATE SET
     source        = EXCLUDED.source,
     captured_at   = now(),
     capture_count = carpool_snapshot.capture_count + 1
+"""
+
+# Время вечернего снимка. Одна константа на расписание и на догоняющий
+# снимок: разойдись они — догонялка решала бы не по тому времени.
+CAPTURE_AT = time(21, 5)
+
+# Был ли за день удачный вечерний снимок. Утренний ручной /db_capture не
+# в счёт: он записал бы утреннее состояние за весь день.
+LIVE_ON_SQL = """
+SELECT EXISTS (
+    SELECT 1 FROM capture_run
+    WHERE source = 'live' AND error IS NULL AND finished_at IS NOT NULL
+      AND (started_at AT TIME ZONE %s)::date = %s
+      AND (started_at AT TIME ZONE %s)::time >= %s
+)
 """
 
 # Сколько из переносимых пар уже лежит в базе. Нужно, чтобы отличить
@@ -178,6 +193,24 @@ def capture_live(sheets, sheet_name: str) -> dict:
             logger.error("Снимок записан, но связи не пересобраны: %s", exc)
             info["links"] = {"error": str(exc)}
     return info
+
+
+def needs_catchup(now_local: datetime, captured: bool, at: time = CAPTURE_AT) -> bool:
+    """Нужен ли снимок сразу после старта бота.
+
+    Задача по расписанию не догоняет пропущенный запуск: перезапуск или
+    выкладка около 21:05 молча оставляли день без снимка.
+    """
+    return not captured and now_local.time() >= at
+
+
+def live_captured_on(day: date) -> bool:
+    from .capture import CAPTURE_TZ
+
+    tz = str(CAPTURE_TZ)
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(LIVE_ON_SQL, (tz, day, tz, CAPTURE_AT))
+        return bool(cur.fetchone()[0])
 
 
 def backfill(sheets, week_sheet: str) -> dict:

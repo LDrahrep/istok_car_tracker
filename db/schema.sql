@@ -51,6 +51,25 @@ CREATE TABLE IF NOT EXISTS capture_run (
     error        text
 );
 
+-- Часовой журнал карточек: строка пишется, только когда состав карточки
+-- изменился (или водитель пропал из листа — тогда пустой список). Снимок
+-- 21:05 — одна фотография в сутки; журнал показывает, что было между ними.
+-- Решение пользователя 24.10: пассажир засчитывается за день, если стоял
+-- в карточке хотя бы на одном часовом снимке этого дня (cardlog.py).
+-- При склейке людей (merge_people) старые написания надо заменить и здесь,
+-- как в carpool_snapshot, иначе они всплывут неопознанными.
+CREATE TABLE IF NOT EXISTS card_log (
+    id          bigserial   PRIMARY KEY,
+    log_date    date        NOT NULL,   -- дата по Чикаго, как snapshot_date
+    captured_at timestamptz NOT NULL DEFAULT now(),
+    telegram_id bigint      NOT NULL,
+    driver_name text        NOT NULL,
+    passengers  text[]      NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS card_log_tg_idx ON card_log (telegram_id, captured_at DESC);
+CREATE INDEX IF NOT EXISTS card_log_date_idx ON card_log (log_date);
+
 -- ────────────────────────────────────────────────────────────────────────
 -- Этап 2: нормализованная модель.
 --

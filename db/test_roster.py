@@ -42,6 +42,9 @@ SNAPSHOTS = [
     (date(2026, 10, 1), 999, "Неизвестный Водитель", ["Badma Matsakov"]),
 ]
 
+# Часовой журнал карточек (card_log). По умолчанию пуст — история как была.
+LOG: list = []
+
 
 class FakeDB:
     def __init__(self):
@@ -109,6 +112,8 @@ class FakeCursor:
                          if r[3] is not None]
         elif s.startswith("SELECT snapshot_date, telegram_id"):
             self._all = list(SNAPSHOTS)
+        elif s.startswith("SELECT log_date, telegram_id"):
+            self._all = list(LOG)
         elif s.startswith("DELETE FROM presence"):
             # Лист перезаписывает свой диапазон: чистим то, что он покрывает.
             sites, days = params
@@ -350,6 +355,18 @@ def test_carpool_reports_what_did_not_link():
     info, _, _ = run()
     assert info["carpool_built"] == 1
     assert len(info["carpool_problems"]["driver"]) == 1
+
+
+def test_carpool_includes_passengers_from_the_hourly_log(monkeypatch):
+    """Стоял в карточке днём, к 21:05 убрали — день засчитан (решение 24.10)."""
+    monkeypatch.setattr(sys.modules[__name__], "LOG", [
+        (date(2026, 10, 1), 111, "Aldar Rakshaev", ["Badma Matsakov", "Aldar Rakshaeff"]),
+        (date(2026, 10, 1), 111, "Aldar Rakshaev", ["Badma Matsakov"]),
+    ])
+    _, db, _ = run()
+    ids = db.person_ids()
+    day = {r[2] for r in db.tables["carpool"].values() if r[0] == date(2026, 10, 1)}
+    assert day == {ids[name_key("Badma Matsakov")], ids[name_key("Aldar Rakshaeff")]}
 
 
 def test_carpool_rebuild_is_idempotent():

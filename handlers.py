@@ -2660,6 +2660,60 @@ class BotHandlers:
                     text=f"🗄 ❌ Снапшот НЕ записан: {str(e)[:500]}",
                 )
 
+    async def db_capture_catchup(self, context: ContextTypes.DEFAULT_TYPE):
+        """Снимок сразу после старта, если вечерний 21:05 пропущен.
+
+        Задача по расписанию пропущенный запуск не догоняет: выкладка или
+        перезапуск около 21:05 молча оставляли день без снимка.
+        """
+        from datetime import datetime
+
+        from db import store
+        from db.capture import CAPTURE_TZ
+
+        if not store.enabled():
+            return
+        now = datetime.now(CAPTURE_TZ)
+        try:
+            captured = await asyncio.to_thread(store.live_captured_on, now.date())
+        except Exception:
+            logger.exception("catch-up check failed")
+            return
+        if store.needs_catchup(now, captured):
+            logger.warning("Вечерний снимок за %s пропущен — снимаю сейчас", now.date())
+            await self.db_capture_job(context)
+
+    async def db_card_log_job(self, context: ContextTypes.DEFAULT_TYPE):
+        """Ежечасный журнал карточек: пишет только изменившиеся.
+
+        Нужен для зачёта «стоял в карточке в любой час дня» (решение 24.10),
+        для разбора споров по времени правки и как запасной снимок.
+        """
+        from db import cardlog, store
+
+        if not store.enabled():
+            return
+        try:
+            info = await asyncio.to_thread(
+                cardlog.log_cards, self.sheets, self.config.DRIVERS_PASSENGERS_SHEET
+            )
+            logger.info("card log: %s", info)
+            # Молчим, пока всё штатно: ежечасные сообщения никто не читает.
+            if info.get("skipped") and self.config.ADMIN_CHAT_ID:
+                await context.bot.send_message(
+                    chat_id=self.config.ADMIN_CHAT_ID,
+                    text=(f"🗂 ⚠️ Журнал карточек пропустил час: лист прочитан"
+                          f" подозрительно ({info['read']} карточек,"
+                          f" в прошлый раз {info['last_read']})"),
+                )
+        except Exception as e:
+            logger.exception("card log failed")
+            if self.config.ADMIN_CHAT_ID:
+                await context.bot.send_message(
+                    chat_id=self.config.ADMIN_CHAT_ID,
+                    text=f"🗂 ❌ Журнал карточек не записан: {str(e)[:300]}",
+                )
+
     # ======================================================
     # Помощь и роль
     # ======================================================

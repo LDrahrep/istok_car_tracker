@@ -300,14 +300,10 @@ def _conflicts(cur, start: date, end: date) -> dict[str, str]:
     Разбор тот же, что у импорта (build_carpool), поэтому пометка совпадает
     с тем, кому пассажир на самом деле засчитан.
     """
+    from .cardlog import day_cards
     from .importer import HISTORY_DAYS, build_carpool
 
-    cur.execute(
-        "SELECT snapshot_date, telegram_id, driver_name, passengers"
-        " FROM carpool_snapshot WHERE snapshot_date BETWEEN %s AND %s",
-        (start - timedelta(days=HISTORY_DAYS), end),
-    )
-    snapshots = cur.fetchall()
+    snapshots = day_cards(cur, start=start - timedelta(days=HISTORY_DAYS), end=end)
     cur.execute("SELECT id, name_key, telegram_id, full_name FROM person")
     people = cur.fetchall()
     by_key = {key: pid for pid, key, _, _ in people}

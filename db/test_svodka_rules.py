@@ -1,10 +1,8 @@
 """Порог пассажиров по объекту — на настоящем Postgres.
 
 Сводка — это SQL, и фейковый курсор проверил бы только число подстановок,
-а не то, что считается. Поэтому здесь поднимается временный кластер
-(initdb во временной папке), на него накатывается schema.sql, и сводка
-считается по-настоящему. Нет локального Postgres или psycopg — тесты
-пропускаются, остальной набор от них не зависит.
+а не то, что считается. Поэтому сводка считается на временном кластере
+(фикстура `pg` в conftest.py).
 
 Правило пользователя от 24.10: в Childress день засчитывается только при
 трёх пассажирах, начиная с недели 19.10. Остальные объекты — два, как было.
@@ -12,12 +10,8 @@
 from __future__ import annotations
 
 import os
-import shutil
-import socket
-import subprocess
 import sys
 from datetime import date
-from pathlib import Path
 
 import pytest
 
@@ -29,50 +23,9 @@ sys.path.insert(0, ROOT)
 from db import svodka  # noqa: E402
 
 
-def _pg_bin(name: str):
-    found = shutil.which(name)
-    if found:
-        return found
-    for candidate in (f"/opt/homebrew/opt/postgresql@16/bin/{name}",
-                      f"/usr/local/opt/postgresql@16/bin/{name}"):
-        if os.path.exists(candidate):
-            return candidate
-    return None
-
-
-INITDB, PG_CTL = _pg_bin("initdb"), _pg_bin("pg_ctl")
-pytestmark = pytest.mark.skipif(not (INITDB and PG_CTL), reason="нет локального Postgres")
-
 RULE_DAY = date(2026, 10, 19)       # с этого понедельника в Childress нужно трое
 BEFORE = date(2026, 10, 18)         # воскресенье прошлой недели — ещё по-старому
 AFTER = date(2026, 10, 20)
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-@pytest.fixture(scope="module")
-def pg(tmp_path_factory):
-    base = tmp_path_factory.mktemp("pg")
-    data = base / "data"
-    subprocess.run([INITDB, "-D", str(data), "-A", "trust", "-U", "test", "--no-sync"],
-                   check=True, capture_output=True)
-    port = _free_port()
-    # Unix-сокет выключен: путь к временной папке на macOS длиннее лимита.
-    opts = (f"-p {port} -c listen_addresses=127.0.0.1 "
-            "-c unix_socket_directories='' -c fsync=off")
-    subprocess.run([PG_CTL, "-D", str(data), "-o", opts, "-l", str(base / "log"),
-                    "-w", "start"], check=True, capture_output=True)
-    dsn = f"postgresql://test@127.0.0.1:{port}/postgres"
-    schema = (Path(ROOT) / "db" / "schema.sql").read_text(encoding="utf-8")
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        conn.execute(schema)
-    yield dsn
-    subprocess.run([PG_CTL, "-D", str(data), "-m", "immediate", "stop"],
-                   capture_output=True)
 
 
 @pytest.fixture

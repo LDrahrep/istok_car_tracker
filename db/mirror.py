@@ -180,6 +180,7 @@ def rebuild_day(day: Optional[date] = None) -> dict:
     Удаляются только строки источника 'snapshot': то, что зеркало записало
     позже снимка, свежее — ON CONFLICT DO NOTHING оставит его на месте.
     """
+    from .cardlog import day_cards
     from .importer import HISTORY_DAYS, build_carpool, name_key
     from .capture import today_in_business_tz
     from .store import _connect, enabled
@@ -191,13 +192,9 @@ def rebuild_day(day: Optional[date] = None) -> dict:
     with _connect() as conn:
         with conn.cursor() as cur:
             # Прошлые дни нужны правилу «пассажир у того, кто вписал позже»:
-            # по одному дню не видно, кто держит запись неделями.
-            cur.execute(
-                "SELECT snapshot_date, telegram_id, driver_name, passengers"
-                " FROM carpool_snapshot WHERE snapshot_date BETWEEN %s AND %s",
-                (day - timedelta(days=HISTORY_DAYS), day),
-            )
-            history = cur.fetchall()
+            # по одному дню не видно, кто держит запись неделями. Журнал
+            # карточек подмешан: за день засчитан любой час (решение 24.10).
+            history = day_cards(cur, start=day - timedelta(days=HISTORY_DAYS), end=day)
             snapshots = [s for s in history if s[0] == day]
             if not snapshots:
                 return {"enabled": True, "day": day, "drivers": 0, "written": 0}

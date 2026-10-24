@@ -35,6 +35,7 @@ from .importer import (
     resolve_telegram_conflicts,
     sites_referenced,
 )
+from .cardlog import day_cards
 from .store import _connect, enabled
 
 logger = logging.getLogger(__name__)
@@ -287,11 +288,9 @@ def import_roster(sheets, *, drivers_sheet: str,
                     "SELECT telegram_id, id FROM person WHERE telegram_id IS NOT NULL"
                 )
                 by_tgid = dict(cur.fetchall())
-                cur.execute(
-                    "SELECT snapshot_date, telegram_id, driver_name, passengers"
-                    " FROM carpool_snapshot"
-                )
-                links, link_problems = build_carpool(cur.fetchall(), ids, by_tgid)
+                # Снимки с подмешанным часовым журналом карточек: за день
+                # засчитан любой час, а не только 21:05 (решение 24.10).
+                links, link_problems = build_carpool(day_cards(cur), ids, by_tgid)
                 cur.execute("DELETE FROM carpool WHERE source = 'snapshot'")
                 kept_manual = _count(cur, "carpool")
                 cur.executemany(CARPOOL_INSERT, [
