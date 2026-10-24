@@ -91,6 +91,26 @@ class StateManager:
             self.state.user_languages[str(tg_id)] = lang
             self._save()
 
+    def get_unreminded(self, after_seconds: int) -> List[Tuple[int, str]]:
+        """Кто молчит дольше after_seconds и ещё не получал напоминания."""
+        now = time.time()
+        out = []
+        with self._lock:
+            for key, entry in self.state.pending_confirmations.items():
+                sent_at = entry.get("sent_at")
+                if sent_at is None or entry.get("reminded_at"):
+                    continue
+                if now - sent_at >= after_seconds:
+                    out.append((int(key), entry.get("shift", "")))
+        return out
+
+    def mark_reminded(self, tg_id: int) -> None:
+        with self._lock:
+            entry = self.state.pending_confirmations.get(str(tg_id))
+            if entry is not None:
+                entry["reminded_at"] = time.time()
+                self._save()
+
     def get_expired(self, timeout_seconds: int) -> List[Tuple[int, str]]:
         """Return list of (tg_id, shift) pairs that have been pending longer than timeout."""
         now = time.time()

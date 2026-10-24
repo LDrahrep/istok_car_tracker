@@ -17,6 +17,7 @@ from models import (Driver, DriverPassengers, Reason, ShiftType, normalize_text,
                     split_passenger_names)
 from phones import normalize as normalize_phone
 from persistence import get_state_manager
+from sheets import suggest_names
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,8 @@ MAX_PASSENGERS = 4
     ST_LEAVE_NAME,
     ST_LEAVE_CONFIRM,
     ST_DRIVER_PHONE,
-) = range(20, 37)
+    ST_DRIVER_NAME_CONFIRM,
+) = range(20, 38)
 
 
 # Полные названия штатов США → 2-буквенный код (чтобы понимать «California» = CA).
@@ -216,6 +218,50 @@ class BotHandlers:
             one_time_keyboard=True,
         )
 
+    def kb_choices(self, options, user_id: int | None = None):
+        """Подсказанные имена кнопками плюс «Отмена».
+
+        Подсказка текстом заставляла водителя перепечатывать имя, а
+        перепечатанное уходило в «не понял»: диалог к тому времени закрыт.
+        """
+        rows = [[o] for o in dict.fromkeys(options)][:6]
+        return ReplyKeyboardMarkup(
+            rows + [[button("btn.cancel", user_id)]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
+
+    # Свой вопрос «Да/Нет» в диалоге: пока он открыт, ответ принадлежит ему,
+    # а не еженедельной проверке. Иначе «Нет» на «Точно перестать быть
+    # водителем?» уходил в проверку и стирал список пассажиров.
+    _OWN_YES_NO_TTL = 30 * 60
+
+    def _ask_own_yes_no(self, context, flow: str) -> None:
+        context.user_data["own_yes_no"] = {"flow": flow, "at": time.time()}
+
+    def _close_own_yes_no(self, context) -> None:
+        user_data = getattr(context, "user_data", None)
+        if user_data is not None:
+            user_data.pop("own_yes_no", None)
+
+    def _own_yes_no_open(self, context) -> bool:
+        user_data = getattr(context, "user_data", None) or {}
+        entry = user_data.get("own_yes_no") or {}
+        return bool(entry) and time.time() - entry.get("at", 0) < self._OWN_YES_NO_TTL
+
+    async def _weekly_answered_by_edit(self, context, update, tg_id: int) -> None:
+        """Водитель поправил список — значит, ответил на проверку.
+
+        Раньше ответом считалось только «Да»: кто правил список кнопками,
+        через 2 часа терял его целиком вместе с только что вписанными.
+        """
+        state = get_state_manager(self.config.STATE_FILE)
+        if state.is_pending(tg_id):
+            state.remove_pending(tg_id)
+            await self.log_admin(
+                context, "Weekly ответ", "✏️ Список изменён — считаем подтверждённым", update,
+            )
+
     async def _reply(self, update: Update, text: str, **kwargs):
         """Safe wrapper around reply_text.
 
@@ -338,29 +384,27 @@ class BotHandlers:
         name = update.effective_message.text.strip()
         emp = self.sheets.get_employee_by_name(name)
         if not emp:
-            # Попробуем предложить похожие имена
+            # Предлагаем похожие имена. Смену водителя ещё не знаем —
+            # ищем по всем сменам.
             all_emp = self.sheets.get_all_employees()
-            all_names = [e.name for e in all_emp if e.name]
-            suggestions = difflib.get_close_matches(
-                name, all_names, n=3, cutoff=0.6,
-            )
+            options, _ = suggest_names(name, all_emp, None, any_shift=True)
             logger.info(
-                "become_driver_name: NOT FOUND %r, all_names=%d, suggestions=%r",
-                name, len(all_names), suggestions,
+                "become_driver_name: NOT FOUND %r, suggestions=%r", name, options,
             )
-            if suggestions:
-                msg = t(
-                    "driver.name_suggestions", tg_id=tg_id,
-                    suggestions="\n".join(f"• {s}" for s in suggestions),
+            if options:
+                await self._reply(
+                    update,
+                    t("driver.name_suggestions", tg_id=tg_id,
+                      suggestions="\n".join(f"• {s}" for s in options)),
+                    reply_markup=self.kb_choices(options, tg_id),
                 )
-            else:
-                msg = t("driver.name_not_in_employees", tg_id=tg_id)
+                return ST_DRIVER_NAME
             await self._reply(
                 update,
-                msg,
-                reply_markup=self.kb_main(update.effective_user.id),
+                t("driver.name_not_in_employees", tg_id=tg_id),
+                reply_markup=self.kb_choices([], tg_id),
             )
-            return ConversationHandler.END
+            return ST_DRIVER_NAME
 
         # Двойная роль разрешена: сотрудник может быть пассажиром у другого водителя
         # и при этом зарегистрироваться водителем (пока у него нет своих пассажиров).
@@ -376,9 +420,49 @@ class BotHandlers:
             )
             return ConversationHandler.END
 
-        context.user_data["driver_name"] = emp.name
-        await self._reply(update, t("driver.enter_car", tg_id=tg_id))
-        return ST_DRIVER_CAR
+        # Переспрашиваем: водитель Mustafo записался под именем своего
+        # пассажира Akbar, а дальше авто-отвязка сняла Akbar с чужой машины.
+        shift_label = ShiftType.from_string(emp.shift).to_display()
+        text = t("driver.confirm_name", tg_id=tg_id, name=emp.name, shift=shift_label)
+        try:
+            rides = self.sheets.find_driver_for_passenger(emp.name)
+        except Exception:
+            rides = None
+        if rides and int(rides[0]) != int(tg_id):
+            text += "\n\n" + t("driver.confirm_name_is_passenger", tg_id=tg_id,
+                                name=emp.name, driver=rides[1])
+
+        context.user_data["driver_name_candidate"] = emp.name
+        context.user_data["driver_name_candidate_shift"] = shift_label
+        self._ask_own_yes_no(context, "driver_name")
+        await self._reply(update, text, reply_markup=self.kb_yes_no(tg_id))
+        return ST_DRIVER_NAME_CONFIRM
+
+    async def become_driver_name_confirm(self, update, context):
+        tg_id = update.effective_user.id
+        intent = parse_yes_no_intent(update.effective_message.text or "")
+        candidate = context.user_data.get("driver_name_candidate")
+
+        if intent == "unclear" and candidate:
+            await self._reply(
+                update,
+                t("driver.confirm_name", tg_id=tg_id, name=candidate,
+                  shift=context.user_data.get("driver_name_candidate_shift", "")),
+                reply_markup=self.kb_yes_no(tg_id),
+            )
+            return ST_DRIVER_NAME_CONFIRM
+
+        self._close_own_yes_no(context)
+        context.user_data.pop("driver_name_candidate", None)
+        context.user_data.pop("driver_name_candidate_shift", None)
+
+        if intent == "yes" and candidate:
+            context.user_data["driver_name"] = candidate
+            await self._reply(update, t("driver.enter_car", tg_id=tg_id))
+            return ST_DRIVER_CAR
+
+        await self._reply(update, t("driver.enter_name", tg_id=tg_id))
+        return ST_DRIVER_NAME
 
     async def become_driver_car(self, update, context):
         context.user_data["driver_car"] = update.effective_message.text.strip()
@@ -549,6 +633,7 @@ class BotHandlers:
             )
             return ConversationHandler.END
 
+        self._ask_own_yes_no(context, "stop_driver")
         await self._reply(
             update,
             t("stop_driver.confirm", tg_id=tg_id),
@@ -559,6 +644,8 @@ class BotHandlers:
     async def stop_being_driver_confirm(self, update, context):
         tg_id = update.effective_user.id
         intent = parse_yes_no_intent(update.effective_message.text or "")
+        if intent != "unclear":
+            self._close_own_yes_no(context)
 
         if intent == "unclear":
             await self._reply(
@@ -681,11 +768,28 @@ class BotHandlers:
             out.append(text)
         return out
 
+    @staticmethod
+    def _suggested_options(warnings) -> list[str]:
+        return [o for r in warnings if r.code == "passenger_warning.not_found_suggest"
+                for o in (r.params.get("options") or [])]
+
+    async def _report_refusals(self, context, update, names, reasons) -> None:
+        """Отказы — в админ-чат. Раньше мы узнавали о них из жалоб водителей."""
+        lines = [t(r.code, lang="ru", **r.params) for r in reasons
+                 if r.code not in ("validate.nobody_added",)]
+        if lines:
+            await self.log_admin(
+                context, "Passengers refused",
+                f"Ввод: {', '.join(names)}\n" + "\n".join(lines)[:1500], update,
+            )
+
     async def add_passengers_input(self, update, context):
         tg_id = update.effective_user.id
         names = split_passenger_names(update.effective_message.text)
 
         valid, errors, warnings = self.sheets.validate_passengers(tg_id, names)
+        await self._report_refusals(context, update, names, errors + warnings)
+        options = self._suggested_options(warnings)
 
         if errors:
             text = "\n\n".join(self._render_reasons(errors, tg_id))
@@ -696,6 +800,12 @@ class BotHandlers:
                     "validate.nobody_added_details", tg_id=tg_id,
                     details="\n".join(self._render_reasons(warnings, tg_id)),
                 )
+            if options:
+                await self._reply(
+                    update, text + "\n\n" + t("passengers.pick_suggestion", tg_id=tg_id),
+                    reply_markup=self.kb_choices(options, tg_id),
+                )
+                return ST_ADD_PASSENGERS
             await self._reply(
                 update, text,
                 reply_markup=self.kb_main(update.effective_user.id),
@@ -707,6 +817,11 @@ class BotHandlers:
             parts = [t("passengers.nothing_added", tg_id=tg_id)]
             if warnings:
                 parts.append("\n".join(self._render_reasons(warnings, tg_id)))
+            if options:
+                parts.append(t("passengers.pick_suggestion", tg_id=tg_id))
+                await self._reply(update, "\n\n".join(parts),
+                                  reply_markup=self.kb_choices(options, tg_id))
+                return ST_ADD_PASSENGERS
             await self._reply(
                 update,
                 "\n\n".join(parts),
@@ -804,6 +919,14 @@ class BotHandlers:
         if warnings:
             parts.append(t("passengers.skipped", tg_id=tg_id,
                            names="\n".join(self._render_reasons(warnings, tg_id))))
+
+        await self._weekly_answered_by_edit(context, update, tg_id)
+
+        if options:
+            parts.append(t("passengers.pick_suggestion", tg_id=tg_id))
+            await self._reply(update, "\n\n".join(parts),
+                              reply_markup=self.kb_choices(options, tg_id))
+            return ST_ADD_PASSENGERS
 
         await self._reply(
             update,
@@ -913,6 +1036,7 @@ class BotHandlers:
             context, "Passenger removed",
             f"Driver tg_id={tg_id}, removed={match}", update,
         )
+        await self._weekly_answered_by_edit(context, update, tg_id)
 
         # Показываем обновлённый список или сообщение если пусто
         if dp.passengers:
@@ -972,6 +1096,16 @@ class BotHandlers:
 
 
 
+    async def weekly_answer_priority(self, update, context) -> bool:
+        """Ответ на проверку, если у водителя не открыт свой вопрос «Да/Нет».
+
+        Возвращает True, если ответ забран проверкой.
+        """
+        if self._own_yes_no_open(context):
+            return False
+        await self.weekly_answer(update, context)
+        return True
+
     async def weekly_answer(self, update, context):
         tg_id = update.effective_user.id
         state = get_state_manager(self.config.STATE_FILE)
@@ -995,42 +1129,19 @@ class BotHandlers:
             return
 
         if intent == "no":
-            try:
-                dp = self.sheets.get_driver_passengers(tg_id)
-                if dp:
-                    old_passengers = dp.passengers[:]
-                    dp.passengers = []
-                    try:
-                        self.sheets.upsert_driver_passengers(dp)
-                        if old_passengers:
-                            self.sheets.clear_rides_with(names=set(old_passengers))
-                    except Exception:
-                        # Откат: восстанавливаем пассажиров
-                        try:
-                            dp.passengers = old_passengers
-                            self.sheets.upsert_driver_passengers(dp)
-                        except Exception:
-                            pass
-                        raise
-            except Exception as e:
-                await self.log_admin(
-                    context, "Sheet write error (weekly answer No)",
-                    str(e)[-1500:], update,
-                )
-                await self._reply(
-                    update,
-                    t("weekly.error", tg_id=tg_id),
-                    reply_markup=self.kb_main(update.effective_user.id),
-                )
-                return
-
+            # «Нет» — «что-то поменялось», а не «сотри всех». Раньше список
+            # обнулялся целиком, и водитель, у которого сменился один
+            # человек, терял остальных. Теперь список остаётся, а водитель
+            # правит его кнопками.
             state.remove_pending(tg_id)
             await self.log_admin(
-                context, "Weekly ответ", f"❌ Нет — очистка (text={text!r})", update,
+                context, "Weekly ответ", f"❌ Нет — список оставлен для правки (text={text!r})", update,
             )
             await self._reply(
                 update,
-                t("weekly.no_answer", tg_id=tg_id),
+                t("weekly.no_answer", tg_id=tg_id,
+                  add_button=button("btn.add_passengers", tg_id),
+                  remove_button=button("btn.remove_passenger", tg_id)),
                 reply_markup=self.kb_main(update.effective_user.id),
             )
             return
@@ -1255,6 +1366,7 @@ class BotHandlers:
         context.user_data["broadcast_text"] = text
         context.user_data["broadcast_count"] = len(driver_tg_ids)
 
+        self._ask_own_yes_no(context, "broadcast")
         await self._reply(
             update,
             t("admin.broadcast_confirm", tg_id=uid, text=text, count=len(driver_tg_ids)),
@@ -1268,6 +1380,8 @@ class BotHandlers:
             return ConversationHandler.END
 
         intent = parse_yes_no_intent(update.effective_message.text or "")
+        if intent != "unclear":
+            self._close_own_yes_no(context)
         if intent == "unclear":
             await self._reply(
                 update,
@@ -2604,6 +2718,7 @@ class BotHandlers:
         context.user_data["leave_driver_tgid"] = driver_tgid
         context.user_data["leave_driver_name"] = driver_name
 
+        self._ask_own_yes_no(context, "leave")
         await self._reply(
             update,
             t("leave.confirm", tg_id=uid, driver=driver_name),
@@ -2621,6 +2736,8 @@ class BotHandlers:
             return ConversationHandler.END
 
         intent = parse_yes_no_intent(update.effective_message.text or "")
+        if intent != "unclear":
+            self._close_own_yes_no(context)
         if intent == "unclear":
             await self._reply(
                 update,

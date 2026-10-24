@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -8,6 +9,10 @@ from typing import Optional
 
 def normalize_text(s: str) -> str:
     s = (s or "").replace('\u00a0', ' ').replace('\u200b', '').replace('\ufeff', '')
+    # Ударения не различаем: «Jesús» на телефоне набирают как «Jesus»,
+    # а в ростере бывает и так и так.
+    s = "".join(c for c in unicodedata.normalize("NFKD", s)
+                if not unicodedata.combining(c))
     return " ".join(s.split()).casefold()
 
 

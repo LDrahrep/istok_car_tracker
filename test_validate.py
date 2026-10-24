@@ -17,11 +17,14 @@ DRIVER = Driver(name="Aldar Rakshaev", tg_id=111, shift="Day")
 
 
 def mgr(driver=DRIVER, employees=(), *, drivers_by_name=None,
-        own_counts=None, carpool=None):
+        own_counts=None, carpool=None, sheet_employees=None):
     m = SheetManager.__new__(SheetManager)
     employees = list(employees)
     m.get_driver = lambda tg: driver
     m.get_all_employees = lambda: employees
+    # Лист сотрудников: по умолчанию тот же справочник, что и база.
+    m.employees_from_sheet = lambda: list(
+        employees if sheet_employees is None else sheet_employees)
     m.get_employee_by_name = lambda n: next(
         (e for e in employees if e.name.casefold() == (n or "").casefold()), None)
     m.get_driver_by_name = lambda n: (drivers_by_name or {}).get(n)
@@ -253,3 +256,76 @@ def test_card_wins_when_directory_names_another_driver():
                          ).validate_passengers(111, ["Badma Matsakov"])
     assert codes(warnings) == ["passenger_warning.already_with_driver"]
     assert warnings[0].params["driver"] == "Ivan Sidorov"
+
+
+# ─────────────── случаи из поддержки 20–24.10 ───────────────
+
+def _emp(name, shift="Day"):
+    return Employee(name=name, phone="", shift=shift)
+
+
+def test_driver_typing_himself_in_reverse_order_is_self():
+    """«Rakshaev Aldar» у водителя «Aldar Rakshaev» — это он сам, а не пассажир.
+    Раньше проверка сравнивала сырой ввод, и водитель записывался сам себе."""
+    valid, _, warnings = mgr(employees=[_emp("Aldar Rakshaev")]).validate_passengers(
+        111, ["Rakshaev Aldar"])
+    assert valid == []
+    assert codes(warnings) == ["passenger_warning.self"]
+
+
+def test_accent_in_input_still_matches():
+    """Водитель набирает «Jesús», в ростере «Jesus»."""
+    valid, _, _ = mgr(employees=[_emp("Jesus Perez")]).validate_passengers(
+        111, ["Jesús Perez"])
+    assert [e.name for e in valid] == ["Jesus Perez"]
+
+
+def test_accent_in_roster_matches_plain_input():
+    """Наоборот: в ростере «Jesús García», а «ú» на телефоне не набрать."""
+    valid, _, _ = mgr(employees=[_emp("Jesús García")]).validate_passengers(
+        111, ["Jesus Garcia"])
+    assert [e.name for e in valid] == ["Jesús García"]
+
+
+def test_suggestion_survives_reversed_order_and_typo():
+    """«Abdurahimov Dzhamshed» при «Dzhamshed Abdurakhimov»: раньше подсказка
+    сравнивала сырые строки (0.42) и предлагала чужих людей."""
+    _, _, warnings = mgr(employees=[_emp("Dzhamshed Abdurakhimov"),
+                                    _emp("Dzhamshed Mamadatoev")]).validate_passengers(
+        111, ["Abdurahimov Dzhamshed"])
+    assert codes(warnings) == ["passenger_warning.not_found_suggest"]
+    assert warnings[0].params["options"][0] == "Dzhamshed Abdurakhimov"
+
+
+def test_suggestion_by_surname_when_first_name_differs():
+    """«Enrique Cisneros» — второе имя человека, который записан «Asdrubal Cisneros»."""
+    _, _, warnings = mgr(employees=[_emp("Asdrubal Cisneros")]).validate_passengers(
+        111, ["Enrique Cisneros"])
+    assert codes(warnings) == ["passenger_warning.not_found_suggest"]
+    assert warnings[0].params["options"] == ["Asdrubal Cisneros"]
+
+
+def test_suggestion_from_other_shift_is_named_but_not_offered_as_button():
+    """Человек из другой смены: имя подсказываем, но кнопкой не предлагаем —
+    добавить его всё равно нельзя."""
+    _, _, warnings = mgr(employees=[_emp("Ivan Petrov", "Night")]).validate_passengers(
+        111, ["Ivan Petrof"])
+    assert codes(warnings) == ["passenger_warning.not_found_suggest"]
+    assert "Ivan Petrov" in warnings[0].params["suggestions"]
+    assert warnings[0].params["options"] == []
+
+
+def test_new_hire_missing_in_db_is_found_in_the_sheet():
+    """Человека внесли в Car Bot, а ежечасная синхронизация ещё не прошла:
+    в базе его нет, в листе сотрудников — есть."""
+    m = mgr(employees=[_emp("Old Timer")],
+            sheet_employees=[_emp("Old Timer"), _emp("New Hire")])
+    valid, _, _ = m.validate_passengers(111, ["New Hire"])
+    assert [e.name for e in valid] == ["New Hire"]
+
+
+def test_same_person_twice_in_one_message_counts_once():
+    """«Badma Matsakov, Matsakov Badma» — один человек, одно место."""
+    valid, _, _ = mgr(employees=[_emp("Badma Matsakov")]).validate_passengers(
+        111, ["Badma Matsakov", "Matsakov Badma"])
+    assert [e.name for e in valid] == ["Badma Matsakov"]

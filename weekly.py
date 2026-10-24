@@ -153,18 +153,51 @@ async def run(shift_arg: str):
             pass
 
 
-EXPIRE_TIMEOUT_SECONDS = 2 * 60 * 60  # 2 часа
+# Молчание: через 2 часа — одно напоминание, через сутки — очистка списка.
+# Раньше список стирался уже через 2 часа: ночную смену спрашивали днём,
+# водитель спал, его пассажиры освобождались и уходили к другим водителям.
+REMIND_AFTER_SECONDS = 2 * 60 * 60
+EXPIRE_TIMEOUT_SECONDS = 24 * 60 * 60
+
+
+async def remind_unanswered(bot, sheets, state, config):
+    """Одно напоминание тем, кто молчит дольше двух часов."""
+    for tg_id, shift in state.get_unreminded(REMIND_AFTER_SECONDS):
+        try:
+            dp = sheets.get_driver_passengers(tg_id)
+            passengers = dp.passengers if dp else []
+            pax = "\n".join(passengers) if passengers else t("weekly.no_passengers", tg_id=tg_id)
+            await bot.send_message(
+                chat_id=tg_id,
+                text=t("weekly.reminder", tg_id=tg_id, passengers=pax),
+                reply_markup=kb_yes_no(tg_id),
+            )
+        except Exception as e:
+            logger.warning(f"remind: failed for tg_id={tg_id}: {e}")
+        # Отмечаем даже при сбое отправки: повторять каждые 15 минут нельзя.
+        state.mark_reminded(tg_id)
+        if config.ADMIN_CHAT_ID:
+            try:
+                await bot.send_message(
+                    chat_id=config.ADMIN_CHAT_ID,
+                    text=f"⏰ Напоминание о проверке: tg_id={tg_id} shift={shift}",
+                )
+            except Exception:
+                pass
+        await asyncio.sleep(0.1)
 
 
 async def expire_unanswered(bot, sheets, state, config):
-    """Не ответил на weekly check за 2 часа → чистим ТОЛЬКО его пассажиров.
+    """Не ответил на weekly check за сутки → чистим ТОЛЬКО его пассажиров.
 
-    ИЗМЕНЕНО: запись водителя (машина, город, номера) НЕ удаляется — обнуляется
-    лишь его список пассажиров (как ответ «Нет»), а Rides with пассажиров сбрасывается.
+    Через 2 часа молчания сначала приходит напоминание (remind_unanswered).
+    Запись водителя (машина, город, номера) НЕ удаляется — обнуляется лишь его
+    список пассажиров, а Rides with пассажиров сбрасывается.
     """
     expired = state.get_expired(EXPIRE_TIMEOUT_SECONDS)
     if not expired:
         logger.info("expire: no expired pending confirmations")
+        await remind_unanswered(bot, sheets, state, config)
         return
 
     logger.info(f"expire: found {len(expired)} unanswered drivers")
@@ -218,7 +251,7 @@ async def expire_unanswered(bot, sheets, state, config):
                     await bot.send_message(
                         chat_id=config.ADMIN_CHAT_ID,
                         text=(
-                            f"⏰ Expire: очищены пассажиры водителя tg_id={tg_id} "
+                            f"⏰ Expire (сутки без ответа): очищены пассажиры водителя tg_id={tg_id} "
                             f"shift={shift} было={len(old_passengers)} (водитель сохранён)"
                         ),
                     )
@@ -239,6 +272,7 @@ async def expire_unanswered(bot, sheets, state, config):
         await asyncio.sleep(0.1)
 
     logger.info(f"expire: removed={removed} failed={failed}")
+    await remind_unanswered(bot, sheets, state, config)
 
 
 async def run_expire():
@@ -263,7 +297,7 @@ def main():
     parser.add_argument(
         "--expire",
         action="store_true",
-        help="Удалить водителей, не ответивших на weekly check за 2 часа",
+        help="Очистить списки водителей, не ответивших на weekly check за сутки",
     )
     args = parser.parse_args()
     if args.expire:

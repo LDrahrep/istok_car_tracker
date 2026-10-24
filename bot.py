@@ -44,6 +44,7 @@ from handlers import (
     ST_LEAVE_NAME,
     ST_LEAVE_CONFIRM,
     ST_DRIVER_PHONE,
+    ST_DRIVER_NAME_CONFIRM,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -205,9 +206,11 @@ def build_app():
     weekly_yes_no_filter = _WeeklyYesNoFilter(config.STATE_FILE)
 
     async def weekly_answer_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await handlers.weekly_answer(update, context)
-        # Диалог не должен увидеть этот ответ вторым обработчиком.
-        raise ApplicationHandlerStop
+        # Если в диалоге открыт свой вопрос «Да/Нет» (перестать быть
+        # водителем, открепиться, подтвердить имя), ответ — диалогу.
+        if await handlers.weekly_answer_priority(update, context):
+            # Диалог не должен увидеть этот ответ вторым обработчиком.
+            raise ApplicationHandlerStop
 
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & weekly_yes_no_filter,
@@ -255,6 +258,9 @@ def build_app():
         states={
             ST_DRIVER_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.become_driver_name)
+            ],
+            ST_DRIVER_NAME_CONFIRM: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.become_driver_name_confirm)
             ],
             ST_DRIVER_CAR: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & not_menu, handlers.become_driver_car)

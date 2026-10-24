@@ -34,6 +34,46 @@ _RETRY_BASE_WAIT = 10  # seconds
 _OP_CACHE_TTL = 3  # seconds
 
 
+def suggest_names(raw: str, employees: list, driver_shift, *,
+                  any_shift: bool = False) -> tuple[list[str], list[str]]:
+    """Подсказки для ненайденного имени: (своя смена, другие смены).
+
+    Сравниваем отсортированные слова без ударений, а не сырые строки:
+    «Abdurahimov Dzhamshed» против «Dzhamshed Abdurakhimov» по сырым строкам
+    похожи на 0.42 и подсказка уходила к чужим людям, по словам — 0.98.
+    Совпала фамилия (или любое слово от 4 букв) — тоже кандидат: водители
+    пишут второе имя («Enrique» вместо «Asdrubal»).
+
+    Свою смену возвращаем отдельно — её можно предложить кнопкой. Другие
+    смены только называем: добавить такого человека всё равно нельзя,
+    зато видно, чья смена устарела.
+    """
+    key = normalize_sorted(raw)
+    tokens = {t for t in key.split() if len(t) >= 4}
+    same: dict[str, str] = {}
+    other: dict[str, str] = {}
+    for e in employees:
+        if not e.name:
+            continue
+        shift = ShiftType.from_string(e.shift)
+        bucket = same if (any_shift or shift == driver_shift) else other
+        bucket.setdefault(normalize_sorted(e.name),
+                          e.name if bucket is same else f"{e.name} ({shift.to_display()})")
+
+    def ranked(pool: dict[str, str], limit: int, cutoff: float) -> list[str]:
+        scored = []
+        for k, label in pool.items():
+            ratio = difflib.SequenceMatcher(None, key, k).ratio()
+            if ratio >= cutoff or (tokens & set(k.split())):
+                scored.append((ratio, label))
+        scored.sort(key=lambda x: -x[0])
+        return [label for _, label in scored[:limit]]
+
+    options = ranked(same, 3, 0.75)
+    elsewhere = [] if options else ranked(other, 2, 0.8)
+    return options, elsewhere
+
+
 class SheetManager:
     def __init__(self, config):
         self.config = config
@@ -714,7 +754,8 @@ class SheetManager:
             return [], errors, warnings
 
         driver_shift = ShiftType.from_string(driver_record.shift)
-        driver_name_norm = normalize_text(driver_record.name)
+        # Себя водитель пишет и как «Фамилия Имя» — сравниваем без порядка слов.
+        driver_key = normalize_sorted(driver_record.name)
 
         # Fallback: drivers.Shift заполняется ARRAYFORMULA, которая может не
         # успеть пересчитаться после регистрации. Берём смену напрямую
@@ -750,6 +791,24 @@ class SheetManager:
             if ShiftType.from_string(e.shift) == driver_shift
         ]
 
+        # Нового человека вносят в Car Bot, а в базу он попадает только с
+        # ежечасной синхронизацией. Не нашли в справочнике — один раз
+        # смотрим лист сотрудников, прежде чем отвечать «не добавили».
+        sheet_index: Optional[dict] = None
+
+        def from_sheet(raw_name: str) -> Optional[Employee]:
+            nonlocal sheet_index
+            if sheet_index is None:
+                try:
+                    rows = [e for e in self.employees_from_sheet() if e.name]
+                except Exception:
+                    logger.exception("validate_passengers: лист сотрудников недоступен")
+                    rows = []
+                sheet_index = {}
+                for e in rows:
+                    sheet_index.setdefault(normalize_sorted(e.name), e)
+            return sheet_index.get(normalize_sorted(raw_name))
+
         # Диагностика: логируем все смены
         shift_counts: dict[str, int] = {}
         for e in all_employees:
@@ -767,14 +826,23 @@ class SheetManager:
 
         for raw in names:
             n = normalize_text(raw)
-            if not n or n in seen:
+            key = normalize_sorted(raw)
+            # Один человек дважды в сообщении («Badma Matsakov, Matsakov
+            # Badma») — одно место, а не два.
+            if not n or key in seen:
                 continue
 
-            seen.add(n)
+            seen.add(key)
+
+            # Водитель вписал себя — частая ошибка, и порядок слов тут любой.
+            if key == driver_key:
+                warnings.append(Reason("passenger_warning.self"))
+                continue
+
             emp = employees.get(n)
 
             if not emp:
-                emp = employees_sorted.get(normalize_sorted(raw))
+                emp = employees_sorted.get(key)
                 if emp:
                     logger.info(
                         "validate_passengers: matched %r via reversed-token lookup -> %r",
@@ -782,16 +850,20 @@ class SheetManager:
                     )
 
             if not emp:
-                suggestions = difflib.get_close_matches(
-                    raw.strip(),
-                    same_shift_names,
-                    n=3,
-                    cutoff=0.68,
-                )
-                if suggestions:
+                emp = from_sheet(raw)
+                if emp:
+                    logger.info(
+                        "validate_passengers: %r нет в базе, найден в листе -> %r",
+                        raw, emp.name,
+                    )
+
+            if not emp:
+                options, elsewhere = suggest_names(raw, all_employees, driver_shift)
+                if options or elsewhere:
                     warnings.append(Reason(
                         "passenger_warning.not_found_suggest",
-                        {"name": raw, "suggestions": ", ".join(suggestions)},
+                        {"name": raw, "suggestions": ", ".join(options + elsewhere),
+                         "options": options},
                     ))
                 else:
                     warnings.append(
@@ -799,10 +871,13 @@ class SheetManager:
                     )
                 continue
 
-            # Водитель не может быть пассажиром (сравниваем по имени)
-            if n == driver_name_norm:
+            emp_key = normalize_sorted(emp.name)
+            if emp_key == driver_key:
                 warnings.append(Reason("passenger_warning.self"))
                 continue
+            if emp_key in seen and emp_key != key:
+                continue
+            seen.add(emp_key)
 
             # Проверка смены
             p_shift = ShiftType.from_string(emp.shift)
