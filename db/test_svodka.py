@@ -134,8 +134,9 @@ def test_fair_rule_requires_both_conditions():
     import svodka
 
     sql = svodka.FAIR_SQL
-    assert "c2.driver_id <> pr.person_id" in sql, "пассажир не ехал с другим"
-    assert ">= 2" in sql, "минимум двое пассажиров на работе"
+    assert "c2.driver_id <> ds.person_id" in sql, "пассажир не ехал с другим"
+    assert ">= min_passengers(ds.site_id, ds.work_date)" in sql, \
+        "на работе не меньше пассажиров, чем требует объект дня"
 
 
 # ─────────── пассажир в двух карточках ───────────

@@ -88,6 +88,26 @@ SELECT * FROM (VALUES
 ) AS seed(id, name, aliases)
 WHERE NOT EXISTS (SELECT 1 FROM site);
 
+-- Сколько пассажиров нужно, чтобы день засчитался в доплату. По умолчанию
+-- два; объект может требовать больше (Childress — трое с 19.10.2026).
+-- История, а не колонка в site: пересчёт прошлой недели должен идти по
+-- правилу, которое действовало тогда, а не по сегодняшнему.
+CREATE TABLE IF NOT EXISTS payout_rule (
+    site_id        text    NOT NULL REFERENCES site(id),
+    valid_from     date    NOT NULL,
+    min_passengers integer NOT NULL CHECK (min_passengers BETWEEN 1 AND 4),
+    PRIMARY KEY (site_id, valid_from)
+);
+
+-- Порог на объект и день. Одна функция на все правила сводки, чтобы
+-- «два» не расползалось по запросам заново.
+CREATE OR REPLACE FUNCTION min_passengers(p_site text, p_day date)
+RETURNS integer LANGUAGE sql STABLE AS $$
+    SELECT COALESCE((SELECT r.min_passengers FROM payout_rule r
+                     WHERE r.site_id = p_site AND r.valid_from <= p_day
+                     ORDER BY r.valid_from DESC LIMIT 1), 2)
+$$;
+
 CREATE TABLE IF NOT EXISTS person (
     id              bigserial   PRIMARY KEY,
     -- Ключ из tabeli. Есть не у всех, поэтому UNIQUE, но не NOT NULL.
@@ -240,8 +260,9 @@ SELECT n.написание AS имя, count(DISTINCT n.дата) AS дней,
 FROM v_name_key n LEFT JOIN person pe ON pe.name_key = n.ключ
 WHERE pe.id IS NULL GROUP BY n.написание;
 
--- Правило доплат целиком: водитель отмечен в табеле И не меньше двух
--- пассажиров. Присутствие пассажиров не учитывается — решение 06.10.
+-- Правило доплат целиком: водитель отмечен в табеле И пассажиров не меньше
+-- порога объекта (два; Childress с 19.10 — три). Объект здесь текущий,
+-- точный по дню — в сводке. Присутствие пассажиров не учитывается — решение 06.10.
 CREATE OR REPLACE VIEW v_credit_day AS
 SELECT c.ride_date   AS дата,
        d.full_name   AS водитель,
@@ -250,7 +271,8 @@ SELECT c.ride_date   AS дата,
        EXISTS (SELECT 1 FROM presence pr
                WHERE pr.person_id = c.driver_id AND pr.work_date = c.ride_date)
                      AS отмечен_в_табеле,
-       count(*) >= 2 AND EXISTS (SELECT 1 FROM presence pr
+       count(*) >= min_passengers(d.current_site_id, c.ride_date)
+         AND EXISTS (SELECT 1 FROM presence pr
                WHERE pr.person_id = c.driver_id AND pr.work_date = c.ride_date)
                      AS день_засчитан
 FROM carpool c JOIN person d ON d.id = c.driver_id

@@ -7,7 +7,9 @@
 
 Правило то же, что было: день засчитывается, если водитель **отмечен
 в табеле** и у него **не меньше двух пассажиров**. Присутствие пассажиров
-не учитывается — решение пользователя от 06.10.
+не учитывается — решение пользователя от 06.10. Порог зависит от объекта
+дня: Childress с 19.10.2026 требует троих (таблица payout_rule, функция
+min_passengers в схеме).
 
 Объект дня берётся из факта присутствия, а не из текущего объекта
 человека: это решение гриля №4, присутствие — истина для доплат. Когда
@@ -25,6 +27,28 @@ HEADER_PRESENT = "В табеле"
 HEADER_HOURS = "Часов"
 HEADER_COMMENT = "Комментарий"
 
+# Объект дня для каждой отметки: тай-брейк при отметке на двух объектах —
+# текущий объект человека (решение №6), иначе первый по алфавиту. От объекта
+# дня зависит и порог пассажиров, поэтому объект определяется ДО зачёта.
+DAY_SITE_CTE = """
+day_site AS (
+    SELECT DISTINCT ON (pr.person_id, pr.work_date)
+           pr.person_id, pr.work_date, pr.site_id
+    FROM presence pr JOIN person p ON p.id = pr.person_id
+    WHERE pr.work_date BETWEEN %(a)s AND %(b)s
+    ORDER BY pr.person_id, pr.work_date,
+             (pr.site_id = p.current_site_id) DESC NULLS LAST, pr.site_id
+)"""
+
+# Дни с записью о пассажирах. Два — нижняя планка для всех объектов; выше
+# её поднимает только min_passengers(объект, день).
+RIDES_CTE = """
+rides AS (
+    SELECT ride_date, driver_id, count(*) AS pax FROM carpool
+    WHERE ride_date BETWEEN %(a)s AND %(b)s
+    GROUP BY 1, 2 HAVING count(*) >= 2
+)"""
+
 # Третье правило — «справедливое». Строгое считает только записанные дни,
 # но посуточный снимок фиксирует момент ВВОДА данных, а не факт поездки:
 # люди заполняют список раз в неделю, когда бот спросит. Мягкое правило
@@ -34,52 +58,37 @@ HEADER_COMMENT = "Комментарий"
 # при двух условиях сразу:
 #   • ни один из его постоянных пассажиров в этот день не ехал с ДРУГИМ
 #     водителем — иначе везти их мог только тот другой;
-#   • хотя бы двое из них в этот день были на работе — иначе везти некого.
+#   • на работе были хотя бы столько из них, сколько требует объект
+#     (двое, в Childress с 19.10 — трое) — иначе везти некого.
 #
 # На периоде 28.09–04.10 это разделило 351 спорный день как 180 к 171.
-FAIR_SQL = """
-WITH rides AS (
-    SELECT ride_date, driver_id FROM carpool
-    WHERE ride_date BETWEEN %(a)s AND %(b)s
-    GROUP BY 1, 2 HAVING count(*) >= 2
-), pool AS (
+FAIR_SQL = f"""
+WITH {DAY_SITE_CTE}, {RIDES_CTE}, pool AS (
     SELECT DISTINCT driver_id, passenger_id FROM carpool
     WHERE ride_date BETWEEN %(a)s AND %(b)s
 ), credited AS (
-    SELECT r.ride_date, r.driver_id FROM rides r
-    WHERE EXISTS (SELECT 1 FROM presence pr
-                  WHERE pr.person_id = r.driver_id AND pr.work_date = r.ride_date)
+    SELECT r.ride_date, r.driver_id, ds.site_id FROM rides r
+    JOIN day_site ds ON ds.person_id = r.driver_id AND ds.work_date = r.ride_date
+    WHERE r.pax >= min_passengers(ds.site_id, r.ride_date)
     UNION
-    SELECT pr.work_date, pr.person_id FROM presence pr
-    WHERE pr.work_date BETWEEN %(a)s AND %(b)s
-      AND pr.person_id IN (SELECT driver_id FROM rides)
+    SELECT ds.work_date, ds.person_id, ds.site_id FROM day_site ds
+    WHERE ds.person_id IN (SELECT driver_id FROM rides)
       AND NOT EXISTS (SELECT 1 FROM rides r
-                      WHERE r.driver_id = pr.person_id AND r.ride_date = pr.work_date)
+                      WHERE r.driver_id = ds.person_id AND r.ride_date = ds.work_date)
       AND NOT EXISTS (
           SELECT 1 FROM pool p JOIN carpool c2 ON c2.passenger_id = p.passenger_id
-          WHERE p.driver_id = pr.person_id AND c2.ride_date = pr.work_date
-            AND c2.driver_id <> pr.person_id)
+          WHERE p.driver_id = ds.person_id AND c2.ride_date = ds.work_date
+            AND c2.driver_id <> ds.person_id)
       AND (SELECT count(*) FROM pool p
-           WHERE p.driver_id = pr.person_id
+           WHERE p.driver_id = ds.person_id
              AND EXISTS (SELECT 1 FROM presence pr2
                          WHERE pr2.person_id = p.passenger_id
-                           AND pr2.work_date = pr.work_date)) >= 2
-), attributed AS (
-    SELECT cr.ride_date, cr.driver_id,
-           COALESCE(
-               (SELECT pr.site_id FROM presence pr
-                WHERE pr.person_id = cr.driver_id AND pr.work_date = cr.ride_date
-                  AND pr.site_id = p.current_site_id LIMIT 1),
-               (SELECT pr.site_id FROM presence pr
-                WHERE pr.person_id = cr.driver_id AND pr.work_date = cr.ride_date
-                ORDER BY pr.site_id LIMIT 1)
-           ) AS site_id
-    FROM credited cr JOIN person p ON p.id = cr.driver_id
+                           AND pr2.work_date = ds.work_date))
+          >= min_passengers(ds.site_id, ds.work_date)
 )
-SELECT a.site_id, p.full_name, date_trunc('week', a.ride_date)::date AS week_start,
+SELECT c.site_id, p.full_name, date_trunc('week', c.ride_date)::date AS week_start,
        count(*) AS days
-FROM attributed a JOIN person p ON p.id = a.driver_id
-WHERE a.site_id IS NOT NULL
+FROM credited c JOIN person p ON p.id = c.driver_id
 GROUP BY 1, 2, 3 ORDER BY 1, 2, 3
 """
 
@@ -87,18 +96,21 @@ GROUP BY 1, 2, 3 ORDER BY 1, 2, 3
 # засчитанных дней — это пересечение двух условий, и без слагаемых его
 # нельзя перепроверить глазами. Живой случай: водителю начислили 7 дней,
 # хотя возил он 2, — увидеть это в одной колонке было невозможно.
-TOTALS_SQL = """
-WITH rides AS (
-    SELECT ride_date, driver_id FROM carpool
-    WHERE ride_date BETWEEN %s AND %s
-    GROUP BY 1, 2 HAVING count(*) >= 2
+# «Возил» — дни, где пассажиров хватает по правилу объекта; без отметки
+# объект дня неизвестен, и порог берётся по текущему объекту человека.
+TOTALS_SQL = f"""
+WITH {DAY_SITE_CTE}, {RIDES_CTE}, qualified AS (
+    SELECT r.ride_date, r.driver_id FROM rides r
+    JOIN person p ON p.id = r.driver_id
+    LEFT JOIN day_site ds ON ds.person_id = r.driver_id AND ds.work_date = r.ride_date
+    WHERE r.pax >= min_passengers(COALESCE(ds.site_id, p.current_site_id), r.ride_date)
 )
 SELECT p.full_name,
-       (SELECT count(*) FROM rides r WHERE r.driver_id = p.id) AS drove,
+       (SELECT count(*) FROM qualified q WHERE q.driver_id = p.id) AS drove,
        (SELECT count(DISTINCT pr.work_date) FROM presence pr
-        WHERE pr.person_id = p.id AND pr.work_date BETWEEN %s AND %s) AS present,
+        WHERE pr.person_id = p.id AND pr.work_date BETWEEN %(a)s AND %(b)s) AS present,
        (SELECT sum(pr.hours) FROM presence pr
-        WHERE pr.person_id = p.id AND pr.work_date BETWEEN %s AND %s) AS hours
+        WHERE pr.person_id = p.id AND pr.work_date BETWEEN %(a)s AND %(b)s) AS hours
 FROM person p
 WHERE p.id IN (SELECT driver_id FROM rides)
 """
@@ -107,64 +119,45 @@ WHERE p.id IN (SELECT driver_id FROM rides)
 # за ОТМЕТКУ В ТАБЕЛЕ, а список пассажиров проверяется один раз на период, а не
 # на каждый день. Оно мягче и даёт больше дней: за неделю 14–20.09 — 809 против
 # 718. Разница не в коде, а в политике выплат, поэтому выбор оставлен за
-# администратором, а не зашит.
-BY_TIMESHEET_SQL = """
-WITH drove AS (
-    SELECT driver_id FROM carpool
-    WHERE ride_date BETWEEN %s AND %s
-    GROUP BY ride_date, driver_id HAVING count(*) >= 2
-)
+# администратором, а не зашит. Поездка, открывающая период, должна проходить
+# порог того объекта, где стоит отметка.
+BY_TIMESHEET_SQL = f"""
+WITH {RIDES_CTE}
 SELECT pr.site_id, p.full_name, date_trunc('week', pr.work_date)::date AS week_start,
        count(DISTINCT pr.work_date) AS days
 FROM presence pr
 JOIN person p ON p.id = pr.person_id
-WHERE pr.work_date BETWEEN %s AND %s
-  AND pr.person_id IN (SELECT driver_id FROM drove)
+WHERE pr.work_date BETWEEN %(a)s AND %(b)s
+  AND EXISTS (SELECT 1 FROM rides r
+              WHERE r.driver_id = pr.person_id
+                AND r.pax >= min_passengers(pr.site_id, r.ride_date))
 GROUP BY 1, 2, 3
 ORDER BY 1, 2, 3
 """
 
-ROWS_SQL = """
-WITH rides AS (
-    SELECT ride_date, driver_id, count(*) AS pax
-    FROM carpool
-    WHERE ride_date BETWEEN %s AND %s
-    GROUP BY 1, 2
-    HAVING count(*) >= 2
-), attributed AS (
-    SELECT r.ride_date, r.driver_id,
-           COALESCE(
-               -- Тай-брейк при отметке на двух объектах: текущий объект человека.
-               (SELECT pr.site_id FROM presence pr
-                WHERE pr.person_id = r.driver_id AND pr.work_date = r.ride_date
-                  AND pr.site_id = p.current_site_id LIMIT 1),
-               (SELECT pr.site_id FROM presence pr
-                WHERE pr.person_id = r.driver_id AND pr.work_date = r.ride_date
-                ORDER BY pr.site_id LIMIT 1)
-           ) AS site_id
-    FROM rides r JOIN person p ON p.id = r.driver_id
-)
-SELECT a.site_id, p.full_name, date_trunc('week', a.ride_date)::date AS week_start,
+ROWS_SQL = f"""
+WITH {DAY_SITE_CTE}, {RIDES_CTE}
+SELECT ds.site_id, p.full_name, date_trunc('week', r.ride_date)::date AS week_start,
        count(*) AS days
-FROM attributed a JOIN person p ON p.id = a.driver_id
-WHERE a.site_id IS NOT NULL
+FROM rides r
+JOIN day_site ds ON ds.person_id = r.driver_id AND ds.work_date = r.ride_date
+JOIN person p ON p.id = r.driver_id
+WHERE r.pax >= min_passengers(ds.site_id, r.ride_date)
 GROUP BY 1, 2, 3
 ORDER BY 1, 2, 3
 """
 
-# Водители, у которых есть дни с 2+ пассажирами, но ни одной отметки в табеле.
-# Их нельзя просто не показать: для человека это потерянные деньги, и
-# причина должна быть названа.
-UNMARKED_SQL = """
-WITH rides AS (
-    SELECT ride_date, driver_id FROM carpool
-    WHERE ride_date BETWEEN %s AND %s
-    GROUP BY 1, 2 HAVING count(*) >= 2
-)
+# Водители, у которых есть дни с нужным числом пассажиров, но ни одной
+# отметки в табеле. Их нельзя просто не показать: для человека это
+# потерянные деньги, и причина должна быть названа. Объекта дня у них нет,
+# поэтому порог — по текущему объекту.
+UNMARKED_SQL = f"""
+WITH {RIDES_CTE}
 SELECT p.full_name, count(*) AS days
 FROM rides r JOIN person p ON p.id = r.driver_id
 WHERE NOT EXISTS (SELECT 1 FROM presence pr
                   WHERE pr.person_id = r.driver_id AND pr.work_date = r.ride_date)
+  AND r.pax >= min_passengers(p.current_site_id, r.ride_date)
 GROUP BY 1 ORDER BY 2 DESC, 1
 """
 
@@ -270,7 +263,8 @@ def build(start: date, end: date, *, mode: str = "fair") -> dict:
 
     `mode`:
       «fair» — строгие дни плюс спорные, прошедшие проверку по пассажирам;
-      «strict» — только дни с записью о двух пассажирах;
+      «strict» — только дни с записью о нужном числе пассажиров
+                 (два, в Childress с 19.10 — три);
       «timesheet» — правило GAS: день за отметку, пассажиры раз на период.
 
     Разница не косметическая: за 28.09–04.10 это 1089, 909 и 1260 дней.
@@ -282,19 +276,15 @@ def build(start: date, end: date, *, mode: str = "fair") -> dict:
         return {"enabled": False}
 
     weeks = weeks_in(start, end)
-    if mode == "fair":
-        sql, params = FAIR_SQL, {"a": start, "b": end}
-    elif mode == "timesheet":
-        sql, params = BY_TIMESHEET_SQL, (start, end, start, end)
-    else:
-        sql, params = ROWS_SQL, (start, end)
+    sql = {"fair": FAIR_SQL, "timesheet": BY_TIMESHEET_SQL}.get(mode, ROWS_SQL)
+    params = {"a": start, "b": end}
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(TOTALS_SQL, (start, end, start, end, start, end))
+        cur.execute(TOTALS_SQL, params)
         totals = {name: (drove, present, hours)
                   for name, drove, present, hours in cur.fetchall()}
         cur.execute(sql, params)
         credited = cur.fetchall()
-        cur.execute(UNMARKED_SQL, (start, end))
+        cur.execute(UNMARKED_SQL, params)
         unmarked = cur.fetchall()
         conflicts = _conflicts(cur, start, end)
 
