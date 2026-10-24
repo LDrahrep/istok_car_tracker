@@ -249,6 +249,42 @@ class BotHandlers:
         entry = user_data.get("own_yes_no") or {}
         return bool(entry) and time.time() - entry.get("at", 0) < self._OWN_YES_NO_TTL
 
+    def _who_is_left(self, driver_tgid: int) -> str:
+        """Кто остался у водителя — для уведомления об откреплении.
+
+        Список нужен водителю сразу: по нему видно, хватает ли пассажиров
+        на доплату, не открывая «Мои пассажиры».
+        """
+        try:
+            dp = self.sheets.get_driver_passengers(driver_tgid)
+        except Exception:
+            logger.exception("не удалось прочитать карточку %s", driver_tgid)
+            return ""
+        names = list(dp.passengers) if dp else []
+        if not names:
+            return t("unlink.nobody_left", tg_id=driver_tgid)
+        return t("unlink.who_is_left", tg_id=driver_tgid,
+                 names="\n".join(f"• {n}" for n in names))
+
+    async def _notify_driver_unlinked(self, context, driver_tgid: int, key: str,
+                                      **params) -> bool:
+        """Сообщить водителю, что пассажира открепили не его руками.
+
+        Решение 24.10: водитель узнаёт о каждом откреплении через бота.
+        Возвращает, дошло ли сообщение — водитель мог заблокировать бота.
+        """
+        remaining = await asyncio.to_thread(self._who_is_left, driver_tgid)
+        try:
+            await context.bot.send_message(
+                chat_id=driver_tgid,
+                text=t(key, tg_id=driver_tgid, remaining=remaining,
+                       button=button("btn.add_passengers", driver_tgid), **params),
+            )
+            return True
+        except Exception:
+            logger.info("не удалось уведомить водителя %s", driver_tgid)
+            return False
+
     async def _weekly_answered_by_edit(self, context, update, tg_id: int) -> None:
         """Водитель поправил список — значит, ответил на проверку.
 
@@ -893,15 +929,8 @@ class BotHandlers:
             unlinked = None
         if unlinked:
             other_tgid, other_name = unlinked
-            try:
-                await context.bot.send_message(
-                    chat_id=other_tgid,
-                    text=t("passengers.auto_unlink_notice", tg_id=other_tgid,
-                           name=driver.name),
-                    reply_markup=self.kb_main(other_tgid),
-                )
-            except Exception:
-                pass
+            await self._notify_driver_unlinked(
+                context, other_tgid, "passengers.auto_unlink_notice", name=driver.name)
             await self.log_admin(
                 context, "Auto-unlink (driver became active)",
                 f"{driver.name} убран из карпула {other_name} (tg={other_tgid})", update,
@@ -1790,13 +1819,19 @@ class BotHandlers:
             return
 
         tg_id, водитель = hit
+        delivered = await self._notify_driver_unlinked(
+            context, tg_id, "unlink.driver_notice", passenger=name)
         await self.log_admin(
             context, "Admin unlink",
-            f"{name} откреплён от {водитель} (tg={tg_id})", update,
+            f"{name} откреплён от {водитель} (tg={tg_id}),"
+            f" водитель {'уведомлён' if delivered else 'НЕ уведомлён'}", update,
         )
+        notice = ("Водителю отправлено уведомление." if delivered else
+                  "⚠️ Водителю не удалось отправить уведомление — возможно, он"
+                  " заблокировал бота. Предупредите его сами.")
         await self._reply(
             update,
-            f"✅ «{name}» откреплён от водителя {водитель}.\n\n"
+            f"✅ «{name}» откреплён от водителя {водитель}.\n\n{notice}\n\n"
             "Теперь его может записать любой другой.",
             reply_markup=self.kb_main(uid),
         )
@@ -2824,14 +2859,8 @@ class BotHandlers:
         # Водитель должен узнать сразу: его карпул мог упасть ниже двух
         # человек, а это потеря дня в доплатах.
         if driver_tgid:
-            try:
-                await context.bot.send_message(
-                    chat_id=driver_tgid,
-                    text=t("leave.driver_notice", tg_id=driver_tgid,
-                           passenger=name, button=button("btn.add_passengers", driver_tgid)),
-                )
-            except Exception:
-                logger.info("не удалось уведомить водителя %s", driver_tgid)
+            await self._notify_driver_unlinked(
+                context, driver_tgid, "leave.driver_notice", passenger=name)
 
         await self.log_admin(context, "Passenger left carpool",
                              f"{name} открепился от {driver_name} (tg_id={driver_tgid})", update)

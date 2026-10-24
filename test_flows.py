@@ -349,3 +349,107 @@ def test_registration_unknown_name_waits_for_another_try(state):
     nxt = asyncio.run(h.become_driver_name(_update("Совсем Неизвестный"), _ctx()))
 
     assert nxt == H.ST_DRIVER_NAME
+
+
+# ───────────── водитель узнаёт о каждом откреплении ─────────────
+#
+# Решение пользователя 24.10: если пассажира открепили не руками водителя,
+# водитель получает сообщение — и видит, кто у него остался, чтобы сразу
+# понять, хватает ли пассажиров на доплату. Ручные правки в таблице — без
+# уведомлений (бот их не видит, и пользователь решил их не ловить).
+
+ADMIN_ID = 900
+OTHER_DRIVER = 222
+
+
+def _unlink_sheets(remaining):
+    return _Sheets(
+        unlink_passenger_everywhere=lambda name, except_tgid: (OTHER_DRIVER, "Boris Mandzhiev"),
+        get_driver_passengers=lambda tg: (
+            DriverPassengers("Boris Mandzhiev", OTHER_DRIVER, list(remaining))
+            if tg == OTHER_DRIVER else None),
+    )
+
+
+def _admin_ctx(*args):
+    ctx = _ctx()
+    ctx.args = list(args)
+    return ctx
+
+
+def test_admin_unlink_notifies_the_driver(state):
+    path, _ = state
+    h, replies, _ = _bot(path, _unlink_sheets(["Aa Aa"]))
+    h.config.ADMIN_USER_IDS = [ADMIN_ID]
+    ctx = _admin_ctx("Bator", "Tcyrenzhapov")
+
+    asyncio.run(h.unlink_command(_update("/unlink Bator Tcyrenzhapov", uid=ADMIN_ID), ctx))
+
+    (chat, text), = ctx.sent
+    assert chat == OTHER_DRIVER
+    assert "Bator Tcyrenzhapov" in text
+    assert "Aa Aa" in text, "водитель видит, кто у него остался"
+    assert "отправлено" in replies[-1][0], "администратор знает, что водитель в курсе"
+
+
+def test_admin_learns_when_the_driver_was_not_reached(state):
+    """Водитель мог заблокировать бота — тогда предупредить его надо самим."""
+    path, _ = state
+    h, replies, _ = _bot(path, _unlink_sheets(["Aa Aa"]))
+    h.config.ADMIN_USER_IDS = [ADMIN_ID]
+    ctx = _admin_ctx("Bator", "Tcyrenzhapov")
+
+    async def blocked(chat_id, text, **kw):
+        raise RuntimeError("Forbidden: bot was blocked by the user")
+
+    ctx.bot.send_message = blocked
+    asyncio.run(h.unlink_command(_update("/unlink Bator Tcyrenzhapov", uid=ADMIN_ID), ctx))
+
+    assert "не удалось" in replies[-1][0]
+
+
+def test_driver_notice_says_when_nobody_is_left(state):
+    path, _ = state
+    h, _, _ = _bot(path, _unlink_sheets([]))
+    h.config.ADMIN_USER_IDS = [ADMIN_ID]
+    ctx = _admin_ctx("Bator", "Tcyrenzhapov")
+
+    asyncio.run(h.unlink_command(_update("/unlink Bator Tcyrenzhapov", uid=ADMIN_ID), ctx))
+
+    (_, text), = ctx.sent
+    assert t("unlink.nobody_left", tg_id=OTHER_DRIVER,
+             button=H.button("btn.add_passengers", OTHER_DRIVER)) in text
+
+
+def test_passenger_leaving_shows_the_driver_who_is_left(state):
+    path, _ = state
+    h, _, _ = _bot(path, _unlink_sheets(["Aa Aa", "Bb Bb"]))
+    ctx = _ctx()
+    ctx.user_data.update(leave_name="Bator Tcyrenzhapov", leave_driver_tgid=OTHER_DRIVER,
+                         leave_driver_name="Boris Mandzhiev")
+
+    asyncio.run(h.leave_carpool_confirm(_update("Да", uid=333), ctx))
+
+    (chat, text), = ctx.sent
+    assert chat == OTHER_DRIVER
+    assert "Bator Tcyrenzhapov" in text
+    assert "Aa Aa" in text and "Bb Bb" in text
+
+
+def test_passenger_who_became_a_driver_shows_the_old_driver_who_is_left(state):
+    path, _ = state
+    writes = []
+    sheets = _saving_sheets(writes)
+    sheets.unlink_passenger_everywhere = lambda name, except_tgid: (OTHER_DRIVER, "Boris Mandzhiev")
+    own = sheets.get_driver_passengers
+    sheets.get_driver_passengers = lambda tg: (
+        DriverPassengers("Boris Mandzhiev", OTHER_DRIVER, ["Cc Cc"])
+        if tg == OTHER_DRIVER else own(tg))
+    h, _, _ = _bot(path, sheets)
+    ctx = _ctx()
+
+    asyncio.run(h.add_passengers_input(_update("Badma Matsakov"), ctx))
+
+    (chat, text), = ctx.sent
+    assert chat == OTHER_DRIVER
+    assert "Aldar Rakshaev" in text and "Cc Cc" in text
