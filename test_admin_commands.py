@@ -14,7 +14,7 @@ import admin_commands
 ROOT = Path(__file__).parent
 
 # Команды, доступные всем, — в админском указателе им не место.
-PUBLIC = {"start", "help", "english", "russian"}
+PUBLIC = {"start", "help"}
 
 
 def _registered() -> set[str]:

@@ -453,3 +453,138 @@ def test_passenger_who_became_a_driver_shows_the_old_driver_who_is_left(state):
     (chat, text), = ctx.sent
     assert chat == OTHER_DRIVER
     assert "Aldar Rakshaev" in text and "Cc Cc" in text
+
+
+# ───────────────────────── выбор языка кнопкой ─────────────────────────
+
+ALL_LANGS = ("ru", "en", "es", "tg", "uz")
+
+
+def _lang_update(data, uid=DRIVER_ID):
+    calls = []
+
+    async def answer():
+        calls.append("answer")
+
+    async def edit_message_reply_markup(reply_markup=None):
+        calls.append(("edit_markup", reply_markup))
+
+    query = SimpleNamespace(data=data, answer=answer,
+                            edit_message_reply_markup=edit_message_reply_markup)
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=uid, username="u"),
+        effective_message=SimpleNamespace(text=None),
+        callback_query=query,
+    )
+    return update, calls
+
+
+def _labels(markup):
+    return [b.text for row in markup.keyboard for b in row]
+
+
+def _callbacks(markup):
+    return [b.callback_data for row in markup.inline_keyboard for b in row]
+
+
+def test_language_button_offers_every_language(state):
+    h, replies, _ = _bot(state[0], _Sheets())
+
+    asyncio.run(h.language_menu(_update("🌐 Язык"), _ctx()))
+
+    assert _callbacks(replies[-1][1]) == [f"lang:{c}" for c in ALL_LANGS]
+
+
+def test_language_buttons_fit_a_phone_screen(state):
+    """«Русский» и «Oʻzbekcha» в одном ряду ещё читаются, пять в ряд — уже нет."""
+    h, _, _ = _bot(state[0], _Sheets())
+    assert max(len(row) for row in h.kb_languages().inline_keyboard) <= 2
+
+
+def test_choosing_spanish_saves_it_and_redraws_the_menu(state):
+    path, mgr = state
+    h, replies, _ = _bot(path, _Sheets())
+    update, calls = _lang_update("lang:es")
+
+    asyncio.run(h.language_chosen(update, _ctx()))
+
+    assert mgr.get_language(DRIVER_ID) == "es"
+    assert "answer" in calls, "без answer() кнопка в Telegram крутится вечно"
+    assert ("edit_markup", None) in calls, "старые кнопки выбора убираем"
+    text, kb = replies[-1]
+    assert text == t("lang.switched", lang="es")
+    assert t("btn.add_passengers", lang="es") in _labels(kb)
+    assert t("btn.add_passengers", lang="ru") not in _labels(kb)
+
+
+def test_language_is_saved_even_if_old_buttons_cannot_be_removed(state):
+    """Сообщение старое — Telegram откажет в правке. Выбор от этого не зависит."""
+    path, mgr = state
+    h, replies, _ = _bot(path, _Sheets())
+    update, _ = _lang_update("lang:en")
+
+    async def refuse(reply_markup=None):
+        raise H.TelegramError("Message can't be edited")
+
+    update.callback_query.edit_message_reply_markup = refuse
+
+    asyncio.run(h.language_chosen(update, _ctx()))
+
+    assert mgr.get_language(DRIVER_ID) == "en"
+    assert replies[-1][0] == t("lang.switched", lang="en")
+
+
+def _start_bot(path):
+    h, replies, _ = _bot(path, _Sheets())
+    h.remember_role_and_check = lambda uid: True
+    return h, replies
+
+
+def test_first_start_asks_for_a_language(state):
+    h, replies = _start_bot(state[0])
+
+    asyncio.run(h.start(_update("/start"), _ctx()))
+
+    assert replies[-1][0] == t("lang.choose", lang="ru")
+    assert _callbacks(replies[-1][1]) == [f"lang:{c}" for c in ALL_LANGS]
+
+
+def test_start_does_not_ask_again_once_chosen(state):
+    path, mgr = state
+    mgr.set_language(DRIVER_ID, "es")
+    h, replies = _start_bot(path)
+
+    asyncio.run(h.start(_update("/start"), _ctx()))
+
+    assert len(replies) == 1
+    assert t("btn.help", lang="es") in replies[0][0]
+
+
+@pytest.mark.parametrize("text,mode", [
+    ("ciudad", "city"), ("por estado", "state"),
+    ("шаҳр", "city"), ("шахр", "city"), ("shahar", "city"), ("shtat", "state"),
+])
+def test_driver_search_understands_typed_words(state, text, mode):
+    h, _, _ = _bot(state[0], _Sheets())
+    ctx = _ctx()
+
+    asyncio.run(h.search_mode(_update(text), ctx))
+
+    assert ctx.user_data["search_mode"] == mode
+
+
+def test_name_confirmation_shows_the_shift_in_the_readers_language(state):
+    path, mgr = state
+    mgr.set_language(DRIVER_ID, "es")
+    employee = Employee(name="Juan Perez", shift="Night", rides_with="", tg_id=None)
+    sheets = _Sheets(
+        get_employee_by_name=lambda name: employee,
+        is_name_taken_by_other_driver=lambda name, tg_id: False,
+        find_driver_for_passenger=lambda name: None,
+    )
+    h, replies, _ = _bot(path, sheets)
+
+    asyncio.run(h.become_driver_name(_update("Juan Perez"), _ctx()))
+
+    assert t("shift.night", lang="es") in replies[-1][0]
+    assert "Night" not in replies[-1][0]

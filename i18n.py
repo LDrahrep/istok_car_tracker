@@ -1,4 +1,4 @@
-"""Per-user i18n (Russian + English).
+"""Per-user i18n. The languages themselves are listed in locales/__init__.py.
 
 Usage:
     from i18n import t, button, get_user_lang, set_user_lang

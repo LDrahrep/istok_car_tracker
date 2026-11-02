@@ -7,12 +7,15 @@ import time
 
 from typing import Optional
 
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup,
+                      ReplyKeyboardMarkup, Update)
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes, ConversationHandler
 
 from config import Buttons
 from i18n import t, button, set_user_lang, is_button
 from intent import parse_yes_no_intent
+from locales import LANGUAGE_NAMES
 from models import (Driver, DriverPassengers, Reason, ShiftType, normalize_text,
                     split_passenger_names)
 from phones import normalize as normalize_phone
@@ -207,9 +210,16 @@ class BotHandlers:
         if user_id is not None and user_id in self.config.ADMIN_USER_IDS:
             keyboard.append([b("btn.admin_weekly_target")])
 
-        keyboard.append([b("btn.help")])
+        keyboard.append([b("btn.help"), b("btn.language")])
 
         return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+    def kb_languages(self):
+        buttons = [InlineKeyboardButton(name, callback_data=f"lang:{code}")
+                   for code, name in LANGUAGE_NAMES.items()]
+        return InlineKeyboardMarkup(
+            [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+        )
 
     def kb_yes_no(self, user_id: int | None = None):
         return ReplyKeyboardMarkup(
@@ -395,6 +405,15 @@ class BotHandlers:
             reply_markup=self.kb_main(uid, is_driver),
         )
 
+        # Не выбирал ни разу: без вопроса тот, кто не читает по-русски,
+        # не найдёт кнопку языка среди русских подписей.
+        if get_state_manager(self.config.STATE_FILE).get_language(uid) is None:
+            await self._reply(
+                update,
+                t("lang.choose", tg_id=uid),
+                reply_markup=self.kb_languages(),
+            )
+
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         await self._reply(
@@ -458,7 +477,7 @@ class BotHandlers:
 
         # Переспрашиваем: водитель Mustafo записался под именем своего
         # пассажира Akbar, а дальше авто-отвязка сняла Akbar с чужой машины.
-        shift_label = ShiftType.from_string(emp.shift).to_display()
+        shift_label = self._shift_label(ShiftType.from_string(emp.shift), tg_id)
         text = t("driver.confirm_name", tg_id=tg_id, name=emp.name, shift=shift_label)
         try:
             rides = self.sheets.find_driver_for_passenger(emp.name)
@@ -796,7 +815,11 @@ class BotHandlers:
     def _render_reasons(self, reasons, uid) -> list[str]:
         out = []
         for r in reasons:
-            text = t(r.code, tg_id=uid, **r.params)
+            params = dict(r.params)
+            for key in ("driver_shift", "passenger_shift"):
+                if key in params:
+                    params[key] = self._shift_label(ShiftType(params[key]), uid)
+            text = t(r.code, tg_id=uid, **params)
             hint_key = self._REASON_HINTS.get(r.code)
             if hint_key:
                 text += " " + t(hint_key, tg_id=uid,
@@ -1463,21 +1486,28 @@ class BotHandlers:
     # Language switching
     # ======================================================
 
-    async def set_language_english(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def language_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = update.effective_user.id
-        set_user_lang(uid, "en", self.config.STATE_FILE)
         await self._reply(
             update,
-            t("lang.switched_en", tg_id=uid),
-            reply_markup=self.kb_main(uid),
+            t("lang.choose", tg_id=uid),
+            reply_markup=self.kb_languages(),
         )
 
-    async def set_language_russian(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def language_chosen(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
         uid = update.effective_user.id
-        set_user_lang(uid, "ru", self.config.STATE_FILE)
+        set_user_lang(uid, query.data.split(":", 1)[1], self.config.STATE_FILE)
+        await query.answer()
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except TelegramError as e:
+            # Только уборка: язык уже сохранён, а старое сообщение Telegram
+            # может и не дать отредактировать.
+            logger.info("не убрал кнопки выбора языка: %s", e)
         await self._reply(
             update,
-            t("lang.switched_ru", tg_id=uid),
+            t("lang.switched", tg_id=uid),
             reply_markup=self.kb_main(uid),
         )
 
@@ -1581,10 +1611,12 @@ class BotHandlers:
         tg_id = update.effective_user.id
         txt = update.effective_message.text or ""
         low = txt.casefold()
-        if is_button(txt, "btn.by_city") or "город" in low or "city" in low:
+        if is_button(txt, "btn.by_city") or any(
+                w in low for w in ("город", "city", "ciudad", "шаҳр", "шахр", "shahar")):
             context.user_data["search_mode"] = "city"
             await self._reply(update, t("search.ask_city", tg_id=tg_id))
-        elif is_button(txt, "btn.by_state") or "штат" in low or "state" in low:
+        elif is_button(txt, "btn.by_state") or any(
+                w in low for w in ("штат", "state", "estado", "shtat")):
             context.user_data["search_mode"] = "state"
             await self._reply(update, t("search.ask_state", tg_id=tg_id))
         else:
@@ -1598,6 +1630,10 @@ class BotHandlers:
         ShiftType.MELTECH_DAY: "shift.meltech_day",
         ShiftType.MELTECH_NIGHT: "shift.meltech_night",
     }
+
+    def _shift_label(self, shift: ShiftType, uid) -> str:
+        key = self._SHIFT_KEYS.get(shift)
+        return t(key, tg_id=uid) if key else shift.to_display()
 
     def _driver_card(self, d, viewer_id=None, taken: Optional[int] = None) -> str:
         """Карточка водителя в выдаче поиска.

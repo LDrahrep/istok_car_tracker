@@ -12,6 +12,7 @@ from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
+    CallbackQueryHandler,
     CommandHandler,
     MessageHandler,
     ConversationHandler,
@@ -23,6 +24,7 @@ from config import Config
 from db.capture import CAPTURE_TZ
 from i18n import all_translations, button_regex
 from intent import parse_yes_no_intent
+from locales import LOCALES
 from persistence import get_state_manager
 from sheets import SheetManager
 from handlers import (
@@ -226,6 +228,7 @@ def build_app():
     re_cancel            = f"^({button_regex('btn.cancel')})$"
     re_my_record         = f"^({button_regex('btn.my_record')})$"
     re_help              = f"^({button_regex('btn.help')})$"
+    re_language          = f"^({button_regex('btn.language')})$"
     re_leave_carpool     = f"^({button_regex('btn.leave_carpool')})$"
     re_find_driver       = f"^({button_regex('btn.find_driver')})$"
     re_search_mode       = f"^({button_regex('btn.by_city', 'btn.by_state')})$"
@@ -238,7 +241,7 @@ def build_app():
         "btn.become_driver", "btn.add_passengers", "btn.my_record",
         "btn.stop_being_driver", "btn.remove_passenger", "btn.find_driver",
         "btn.admin_weekly_target", "btn.cancel",
-        "btn.help", "btn.leave_carpool",
+        "btn.help", "btn.leave_carpool", "btn.language",
     ) + ")$"
     not_menu = ~filters.Regex(re_menu)
 
@@ -355,8 +358,11 @@ def build_app():
     app.add_handler(CommandHandler("db_stale", handlers.db_stale_command, block=False))
     app.add_handler(CommandHandler("db_restore", handlers.db_restore_command, block=False))
     app.add_handler(CommandHandler("db_diff", handlers.db_diff_command, block=False))
-    app.add_handler(CommandHandler("english", handlers.set_language_english))
-    app.add_handler(CommandHandler("russian", handlers.set_language_russian))
+    # Инлайн-кнопки вне диалога: выбор языка не сбивает незаконченный ввод.
+    app.add_handler(MessageHandler(filters.Regex(re_language), handlers.language_menu))
+    app.add_handler(CallbackQueryHandler(
+        handlers.language_chosen, pattern=f"^lang:({'|'.join(LOCALES)})$",
+    ))
 
     pending_weekly_filter = _PendingWeeklyFilter(config.STATE_FILE)
     app.add_handler(MessageHandler(

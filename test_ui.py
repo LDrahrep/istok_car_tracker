@@ -4,9 +4,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from locales import en, ru
+from locales import en, es, ru, tg, uz
 
 ROOT = Path(__file__).parent
+ALL_LOCALES = (("ru", ru), ("en", en), ("es", es), ("tg", tg), ("uz", uz))
+TRANSLATIONS = ALL_LOCALES[1:]  # всё, что сверяется с русским
+LOCALE_FILES = tuple(f"locales/{name}.py" for name, _ in ALL_LOCALES)
 SOURCES = ["handlers.py", "bot.py", "weekly.py", "report.py", "i18n.py", "sheets.py"]
 
 # Ключи, собираемые динамически (t(key) с переменной) — проверить статикой
@@ -31,10 +34,11 @@ def _used_keys() -> set[str]:
 
 def test_locales_are_symmetric():
     """Расхождение ключей = англоязычный пользователь увидит русский текст."""
-    assert set(ru.STRINGS) == set(en.STRINGS), (
-        f"только в ru: {sorted(set(ru.STRINGS) - set(en.STRINGS))}, "
-        f"только в en: {sorted(set(en.STRINGS) - set(ru.STRINGS))}"
-    )
+    for name, loc in TRANSLATIONS:
+        assert set(ru.STRINGS) == set(loc.STRINGS), (
+            f"только в ru: {sorted(set(ru.STRINGS) - set(loc.STRINGS))}, "
+            f"только в {name}: {sorted(set(loc.STRINGS) - set(ru.STRINGS))}"
+        )
 
 
 def test_every_used_key_exists():
@@ -46,20 +50,98 @@ def test_every_used_key_exists():
     assert not missing, f"ключи используются, но их нет в локали: {missing}"
 
 
-def test_english_locale_has_no_russian():
-    """Единственное исключение — сообщение о переключении НА русский."""
-    offenders = [
-        k for k, v in en.STRINGS.items()
-        if isinstance(v, str) and re.search(r"[а-яё]", v, re.I) and k != "lang.switched_ru"
-    ]
-    assert not offenders, f"русский текст в английской локали: {offenders}"
+def test_latin_locales_have_no_russian():
+    for name, loc in (("en", en), ("es", es), ("uz", uz)):
+        offenders = [k for k, v in loc.STRINGS.items()
+                     if isinstance(v, str) and re.search(r"[а-яё]", v, re.I)]
+        assert not offenders, f"русский текст в локали {name}: {offenders}"
+
+
+def test_translations_are_not_copies_of_english():
+    """Ключ есть, симметрия цела, а текст так и остался английским."""
+    same_on_purpose = {"btn.no"}  # испанское «❌ No» пишется как английское
+    for name, loc in (("es", es), ("tg", tg), ("uz", uz)):
+        copied = sorted(k for k in loc.STRINGS
+                        if loc.STRINGS[k] == en.STRINGS[k] and k not in same_on_purpose)
+        assert not copied, f"не переведено ({name}): {copied}"
+
+
+def test_tajik_is_not_left_in_russian():
+    """Таджикский на кириллице, проверка на русские буквы его не поймает.
+
+    Зато в таджикском алфавите нет ы, щ, ь, ц: они выдают забытый русский текст.
+    """
+    copied = [k for k in tg.STRINGS if tg.STRINGS[k] == ru.STRINGS[k]]
+    assert not copied, f"не переведено (tg): {copied}"
+    leftovers = [k for k, v in tg.STRINGS.items() if re.search(r"[ыщьц]", v, re.I)]
+    assert not leftovers, f"русские буквы в таджикской локали: {leftovers}"
+
+
+# Всё, что человек вводит, сверяется с табелем и таблицами, а там латиница.
+# Кнопки могут быть на любом языке, вводить — только по-английски.
+ASKS_FOR_INPUT = (
+    "driver.enter_name", "driver.enter_car", "driver.enter_plates",
+    "driver.ask_city", "passengers.enter", "leave.ask_name",
+    "search.ask_name", "search.ask_city",
+)
+NOT_FOUND_ERRORS = (
+    "driver.name_not_in_employees", "driver.name_suggestions",
+    "leave.not_employee", "search.not_employee",
+    "driver.city_not_found", "search.city_not_found",
+)
+
+
+def test_cleared_list_message_explains_how_to_get_the_menu_back():
+    """Сообщение уходит без клавиатуры, на экране остаются старые «Да/Нет»."""
+    for name, loc in ALL_LOCALES:
+        assert "/start" in loc.STRINGS["weekly.expired_cleared"], name
+
+
+def test_input_prompts_say_to_type_in_english():
+    for name, loc in ALL_LOCALES:
+        hint = loc.STRINGS["hint.english"]
+        for key in ASKS_FOR_INPUT + NOT_FOUND_ERRORS + ("lang.switched", "help.footer"):
+            assert loc.STRINGS[key].count(hint) == 1, f"{name}: {key}"
+
+
+def test_passenger_not_found_mentions_english():
+    """Предупреждений бывает до четырёх в одном сообщении, поэтому целая
+    подсказка тут лишняя: достаточно слова внутри шага."""
+    word = {"ru": "на английском", "en": "in English", "es": "en inglés",
+            "tg": "англисӣ", "uz": "ingliz tilida"}
+    for name, loc in ALL_LOCALES:
+        assert word[name] in loc.STRINGS["passenger_warning.not_found"], name
 
 
 def test_placeholders_match_between_locales():
     """{driver} в одной локали и {name} в другой — это KeyError в проде."""
     ph = lambda s: set(re.findall(r"\{(\w+)\}", s))
-    bad = [k for k in ru.STRINGS if ph(ru.STRINGS[k]) != ph(en.STRINGS[k])]
-    assert not bad, f"разные подстановки в ru/en: {bad}"
+    for name, loc in TRANSLATIONS:
+        bad = [k for k in ru.STRINGS if ph(ru.STRINGS[k]) != ph(loc.STRINGS[k])]
+        assert not bad, f"разные подстановки в ru/{name}: {bad}"
+
+
+def test_instructions_name_buttons_that_exist():
+    """«Нажми X» в тексте обязано совпадать с подписью кнопки X в этом языке."""
+    expected = {
+        # На проверке на экране только «Да/Нет»: меню открывается через «Нет»,
+        # без этой кнопки в тексте совет нажать «Удалить» никуда не ведёт.
+        "weekly.greeting": ("btn.yes", "btn.no", "btn.remove_passenger", "btn.add_passengers"),
+        "weekly.reminder": ("btn.yes", "btn.no", "btn.remove_passenger", "btn.add_passengers"),
+        "weekly.unclear": ("btn.yes", "btn.no"),
+        "weekly.expired_cleared": ("btn.add_passengers",),
+        "driver.ask_phone": ("btn.skip",),
+        "driver.already_registered": ("btn.stop_being_driver",),
+        "start.greeting": ("btn.help",),
+        "start.role_passenger": ("btn.become_driver",),
+        "help.footer": ("btn.language",),
+    }
+    for name, loc in ALL_LOCALES:
+        for key, buttons in expected.items():
+            for b in buttons:
+                assert loc.STRINGS[b] in loc.STRINGS[key], (
+                    f"{name}: в {key} нет подписи кнопки {b}"
+                )
 
 
 # ─────────────────────────── меню по ролям ───────────────────────────
@@ -76,6 +158,20 @@ def _menu(is_driver):
     h._role_cache = {}
     kb = h.kb_main(user_id=1, is_driver=is_driver)
     return [b.text for row in kb.keyboard for b in row]
+
+
+def test_language_button_is_in_every_menu():
+    for role in (True, False, None):
+        assert ru.STRINGS["btn.language"] in _menu(role)
+
+
+def test_language_is_no_longer_a_slash_command():
+    src = (ROOT / "bot.py").read_text(encoding="utf-8")
+    assert 'CommandHandler("english"' not in src
+    assert 'CommandHandler("russian"' not in src
+    for _, loc in ALL_LOCALES:
+        assert "/english" not in loc.STRINGS["help.footer"]
+        assert "/russian" not in loc.STRINGS["help.footer"]
 
 
 def test_driver_menu_hides_irrelevant_actions():
@@ -209,7 +305,7 @@ def test_no_duplicate_keys_in_locales():
     import ast
     import collections
 
-    for name in ("locales/ru.py", "locales/en.py"):
+    for name in LOCALE_FILES:
         tree = ast.parse((ROOT / name).read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Dict):
@@ -236,7 +332,7 @@ def test_admin_handle_lives_in_one_place():
     """
     from locales.contacts import ADMIN_CONTACT
 
-    for name in ("locales/ru.py", "locales/en.py"):
+    for name in LOCALE_FILES:
         src = (ROOT / name).read_text(encoding="utf-8")
         assert ADMIN_CONTACT not in src, (
             f"{name}: хэндл вписан литералом — подставляй {{_ADMIN}}"
@@ -251,8 +347,9 @@ def test_no_faceless_admin_references():
     """
     import re as _re
 
-    pattern = _re.compile(r"администратор|administrator|the admin\b", _re.I)
-    for loc_name, loc in (("ru", ru), ("en", en)):
+    pattern = _re.compile(
+        r"администратор|маъмур|administrator|administrador|the admin\b", _re.I)
+    for loc_name, loc in ALL_LOCALES:
         bad = [k for k, v in loc.STRINGS.items()
                if k not in ADMIN_GROUP_KEYS and pattern.search(v)]
         assert not bad, f"{loc_name}: отправляют к администратору без хэндла: {bad}"
@@ -267,7 +364,7 @@ def test_admin_contact_is_substituted_not_left_as_placeholder():
     """
     from locales.contacts import ADMIN_CONTACT
 
-    for loc_name, loc in (("ru", ru), ("en", en)):
+    for loc_name, loc in ALL_LOCALES:
         leaked = [k for k, v in loc.STRINGS.items() if "_ADMIN" in v]
         assert not leaked, f"{loc_name}: подстановка не выполнилась: {leaked}"
         assert any(ADMIN_CONTACT in v for v in loc.STRINGS.values()), (
@@ -308,6 +405,20 @@ def test_same_reason_in_russian():
                             {"name": "Иван", "driver_shift": "day",
                              "passenger_shift": "night"})], "ru")
     assert "другой смене" in line
+
+
+def test_wrong_shift_names_shifts_in_the_readers_language():
+    """Причина несёт код смены, а показывать надо название, а не meltech_day."""
+    from models import Reason
+
+    r = Reason("passenger_warning.wrong_shift", {
+        "name": "Ivan", "driver_shift": "day", "passenger_shift": "meltech_night",
+    })
+    for code, loc in ALL_LOCALES:
+        line, = _render([r], code)
+        assert loc.STRINGS["shift.day"] in line, code
+        assert loc.STRINGS["shift.meltech_night"] in line, code
+        assert "meltech_night" not in line, code
 
 
 def test_detach_hint_uses_the_button_name_of_that_language():

@@ -31,6 +31,19 @@ _POS_OVERRIDE = [
     r"\bno\s+change\s+needed\b",
     r"\bничего\s+не\s+(менял|измен)",
     r"\bбез\s*изменени",
+    # Испанский: «no ha cambiado» — согласие, хотя начинается с «no».
+    r"\bsin\s+cambios?\b",
+    r"\bno\s+(ha|han|hubo)\s+cambiado\b",
+    r"\bno\s+(hay|hubo)\s+cambios?\b",
+    r"\bno\s+cambi(o|e|aron)\b",
+    r"\bnada\s+(ha\s+)?cambi",
+    # Таджикский и узбекский, написание после _normalize: «тағйирот нест»,
+    # «oʻzgarish yoʻq» — слово «нет» здесь значит, что менять нечего.
+    r"\bтагйир\s+наефт\b", r"\bиваз\s+нашуд\b", r"\bбе\s*тагйир",
+    r"\bтагйирот\s+нест\b",
+    r"\bozgarmadi\b", r"\bozgarish\s+yoq\b", r"\bozgarishsiz\b",
+    r"\bozgargani\s+yoq\b",
+    r"\bузгармади\b", r"\bузгариш\s+йук\b", r"\bузгаришсиз\b",
 ]
 
 _NEG_PHRASES = [
@@ -52,6 +65,21 @@ _NEG_PHRASES = [
     r"\b(don\s*'?\s*t|do\s+not|no\s+longer)\s+driv", r"\bnot\s+driving\b",
     r"\bneed\s+to\s+(update|change)\b", r"\bwant\s+to\s+(update|change)\b",
     r"\bnew\s+(list|passengers?)\b",
+    # Испанский (текст уже без ударений, см. _normalize)
+    r"\bno\s+(es|son|esta|estan)\s+(correct|bien|actual)", r"\bincorrect",
+    r"\bya\s+no\b",
+    r"\bno\s+((lo|la|los|las|le|les)\s+)?(conduzco|manejo|llevo)\b",
+    r"(?<!no\s)\bborr", r"(?<!no\s)\belimin", r"(?<!no\s)\bquit", r"(?<!no\s)\blimpi",
+    r"\bcambi(o|os|aron|ado|ados)\b", r"\bdiferentes?\b",
+    r"\b(lista|pasajeros?)\s+nuev", r"\bnuev[ao]s?\s+(lista|pasajeros?)\b",
+    # Таджикский
+    r"\bдуруст\s+нест\b", r"\bнодуруст\b", r"\bхато\b",
+    r"\bтагйир\s+ефт\b", r"\bиваз\s+шуд\b",
+    r"\bдигар\s+(намебарам|намеронам|намеравад|намераванд)\b",
+    # Узбекский, латиница и кириллица
+    r"\btogri\s+emas\b", r"\bnotogri\b", r"\bozgardi\b", r"\bxato\b",
+    r"\bendi\s+(olib\s+)?bormay", r"\bboshqa\b",
+    r"\bтугри\s+эмас\b", r"\bнотугри\b", r"\bузгарди\b", r"\bбошка\b",
 ]
 
 _POS_PHRASES = [
@@ -70,11 +98,20 @@ _POS_PHRASES = [
     r"\b(keep|leave)\s+(it|them|as\s+is|the\s+same)\b",
     r"\bup\s+to\s+date\b", r"\bsame\s+as\s+(before|last\s+week)\b",
     r"\bsame\b", r"\bcorrect\b", r"\bconfirm(ed)?\b",
+    # Испанский
+    r"\btodo\s+(bien|correcto|igual|ok)\b", r"\bsigue\s+(todo\s+)?igual\b",
+    r"\besta\s+bien\b", r"\bde\s+acuerdo\b", r"\bigual\s+que\s+antes\b",
+    r"\bconfirmo\b", r"\bcorrecto\b",
+    # Таджикский и узбекский
+    r"\bхама(аш)?\s+(дуруст|хуб)\b", r"\bдуруст\s+аст\b",
+    r"\bhammasi\s+(togri|yaxshi|joyida)\b", r"\bхаммаси\s+(тугри|яхши|жойида)\b",
 ]
 
 _NEG_WORDS = [
     r"нет[ау]?", r"не+", r"неа+", r"no+", r"n", r"nope+", r"nah+", r"nay",
     r"wrong", r"different", r"changed", r"remove", r"clear", r"nvm",
+    r"nop+", r"incorrecto", r"mal", r"negativo",
+    r"нест", r"yoq+", r"yuq", r"йук", r"йок",
     r"-+", r"—", r"👎", r"❌",
 ]
 
@@ -84,13 +121,28 @@ _POS_WORDS = [
     r"верно", r"точно", r"конечно", r"есть", r"sure",
     r"correct", r"right", r"true", r"fine", r"good", r"same", r"valid",
     r"confirm(ed)?", r"aye", r"yea+", r"affirmative",
+    r"si+", r"claro", r"vale", r"exacto", r"cierto", r"bien", r"igual",
+    r"dale", r"perfecto", r"afirmativo",
+    r"ха+", r"бале", r"оре", r"дуруст", r"хуб",
+    r"ha+", r"xa+", r"xop", r"hop", r"mayli", r"togri", r"yaxshi",
+    r"хоп", r"хуп", r"майли", r"тугри", r"яхши",
     r"\++", r"👍", r"✅", r"☑",
 ]
 
 
+# «sí» и «si», «ҳа» и «ха» — один ответ: на телефоне ударений и особых букв
+# часто нет. Поэтому образцы выше написаны без них.
+_PLAIN_LETTERS = str.maketrans("áéíóúüҳӯӣҷқғў", "aeiouuхуичкгу")
+
+# Узбекский апостроф — часть слова: yo'q, to'g'ri. Как знак препинания он
+# разорвал бы слово на «yo» и «q». Пишут его по-разному, отсюда набор.
+_WORD_APOSTROPHE = re.compile(r"(?<=\w)['’‘ʻʼ`](?=\w)")
+
+
 def _normalize(text: str) -> str:
-    s = text.strip().lower().replace("ё", "е")
-    s = re.sub(r"[!?\.,;:\"'\(\)\[\]/\\]+", " ", s)
+    s = text.strip().lower().replace("ё", "е").translate(_PLAIN_LETTERS)
+    s = _WORD_APOSTROPHE.sub("", s)
+    s = re.sub(r"[!?¡¿\.,;:\"'\(\)\[\]/\\]+", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
