@@ -2878,9 +2878,13 @@ class BotHandlers:
 
         try:
             # except_tgid=0 — исключать некого, снимаем у текущего водителя.
-            await asyncio.to_thread(
+            hit = await asyncio.to_thread(
                 self.sheets.unlink_passenger_everywhere, name, except_tgid=0
             )
+            if hit is None:
+                # Карточка не изменилась — «Готово» и уведомление водителю
+                # были бы неправдой (08.11, Kamol Azizov).
+                raise RuntimeError("в карточке водителя его не нашли")
         except Exception as e:
             logger.exception("leave_carpool failed")
             await self._reply(update, t("leave.error", tg_id=uid),

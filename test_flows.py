@@ -436,6 +436,24 @@ def test_passenger_leaving_shows_the_driver_who_is_left(state):
     assert "Aa Aa" in text and "Bb Bb" in text
 
 
+def test_passenger_leaving_hears_the_truth_when_nothing_was_removed(state):
+    """08.11 Kamol Azizov получил «Готово», а в карточке остался. Если
+    вычеркнуть не вышло, пассажир должен это узнать, а водитель — не получать
+    уведомление об откреплении, которого не было."""
+    path, _ = state
+    sheets = _unlink_sheets(["Aa Aa"])
+    sheets.unlink_passenger_everywhere = lambda name, except_tgid: None
+    h, replies, _ = _bot(path, sheets)
+    ctx = _ctx()
+    ctx.user_data.update(leave_name="Bator Tcyrenzhapov", leave_driver_tgid=OTHER_DRIVER,
+                         leave_driver_name="Boris Mandzhiev")
+
+    asyncio.run(h.leave_carpool_confirm(_update("Да", uid=333), ctx))
+
+    assert ctx.sent == []
+    assert replies[-1][0] == t("leave.error", tg_id=333)
+
+
 def test_passenger_who_became_a_driver_shows_the_old_driver_who_is_left(state):
     path, _ = state
     writes = []

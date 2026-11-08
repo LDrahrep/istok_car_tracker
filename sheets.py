@@ -1239,16 +1239,18 @@ class SheetManager:
         if int(other_tgid) == int(except_tgid):
             return None
         # не считаем self-assignment (X приписан к себе) за карпул
-        if normalize_text(other_name) == normalize_text(passenger_name):
+        if normalize_sorted(other_name) == normalize_sorted(passenger_name):
             return None
         dp = self.get_driver_passengers(other_tgid)
         if not dp:
             return None
-        n = normalize_text(passenger_name)
-        kept = [p for p in dp.passengers if normalize_text(p) != n]
-        if len(kept) == len(dp.passengers):
+        # Порядок слов не важен, как в find_driver_for_passenger: иначе
+        # водителя находим, а «Azizov Kamol» в карточке не вычёркиваем.
+        n = normalize_sorted(passenger_name)
+        removed = [p for p in dp.passengers if normalize_sorted(p) == n]
+        if not removed:
             return None
-        dp.passengers = kept
+        dp.passengers = [p for p in dp.passengers if normalize_sorted(p) != n]
         self.upsert_driver_passengers(dp)
-        self.clear_rides_with(names={passenger_name})
+        self.clear_rides_with(names={passenger_name, *removed})
         return other_tgid, other_name
