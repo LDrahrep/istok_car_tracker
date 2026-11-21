@@ -6,6 +6,7 @@ from typing import Optional
 
 import gspread
 import difflib
+import requests
 from gspread.exceptions import APIError
 from google.oauth2.service_account import Credentials
 
@@ -107,6 +108,19 @@ class SheetManager:
                         "Sheets API error %s, retry %d/%d in %ds",
                         e.response.status_code,
                         attempt + 1, _RETRY_MAX, wait,
+                    )
+                    time.sleep(wait)
+                    self._spreadsheet = None
+                    continue
+                raise
+            # Google иногда рвёт соединение, не ответив кодом: 17.11 так
+            # пропал вечерний снимок (RemoteDisconnected). Повторяем так же.
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                if attempt < _RETRY_MAX:
+                    wait = (attempt + 1) * _RETRY_BASE_WAIT
+                    logger.warning(
+                        "Sheets connection error (%s), retry %d/%d in %ds",
+                        type(e).__name__, attempt + 1, _RETRY_MAX, wait,
                     )
                     time.sleep(wait)
                     self._spreadsheet = None

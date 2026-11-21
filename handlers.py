@@ -4,6 +4,7 @@ import asyncio
 import difflib
 import logging
 import time
+from datetime import timedelta
 
 from typing import Optional
 
@@ -26,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 # Жёсткий предел вместимости карпула — тот же, что в schema БД.
 MAX_PASSENGERS = 4
+
+# Упавший вечерний снимок повторяется через 10 минут, не больше трёх раз:
+# так обрыв связи в 21:05 не оставляет день без снимка до перезапуска бота.
+CAPTURE_RETRIES = 3
+CAPTURE_RETRY_AFTER = timedelta(minutes=10)
 
 
 (
@@ -2725,10 +2731,24 @@ class BotHandlers:
                 )
         except Exception as e:
             logger.exception("daily capture failed")
+            # Вечерний снимок не ждёт перезапуска: 17.11 после одного обрыва
+            # связи день так и остался без снимка. Догонялка сама проверит,
+            # не появился ли снимок, и снимет, если нет.
+            job = getattr(context, "job", None)
+            attempt = ((getattr(job, "data", None) or {}).get("attempt", 0))
+            again = attempt < CAPTURE_RETRIES and getattr(context, "job_queue", None) is not None
+            if again:
+                context.job_queue.run_once(
+                    self.db_capture_catchup, when=CAPTURE_RETRY_AFTER,
+                    data={"attempt": attempt + 1}, name="carpool_snapshot_retry",
+                )
             if self.config.ADMIN_CHAT_ID:
+                minutes = int(CAPTURE_RETRY_AFTER.total_seconds() // 60)
+                tail = (f"\nПовторю через {minutes} мин (попытка {attempt + 1} из {CAPTURE_RETRIES})."
+                        if again else "")
                 await context.bot.send_message(
                     chat_id=self.config.ADMIN_CHAT_ID,
-                    text=f"🗄 ❌ Снапшот НЕ записан: {str(e)[:500]}",
+                    text=f"🗄 ❌ Снапшот НЕ записан: {str(e)[:500]}{tail}",
                 )
 
     async def db_capture_catchup(self, context: ContextTypes.DEFAULT_TYPE):
