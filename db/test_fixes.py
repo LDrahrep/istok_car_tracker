@@ -106,3 +106,23 @@ def test_a_row_gone_is_removed_and_its_return_is_returned():
     plan = plan_import([sr(2, "Petr Probnyi")], [dbf(2, "Petr Probnyi", row=9, removed=True)])
     assert [(f.id, r.row) for f, r in plan.returned] == [(2, 2)]
     assert plan.new == [] and plan.removed == [] and plan.seen == []
+
+
+def test_a_returned_green_row_on_an_unpaid_record_is_also_paid():
+    plan = plan_import([sr(2, green=True)], [dbf(2, row=9, removed=True, paid=False)])
+    assert [f.id for f, _ in plan.returned] == [2]
+    assert [f.id for f, _ in plan.paid] == [2] and plan.unpaid == []
+
+
+def test_a_returned_white_row_on_a_paid_record_is_also_unpaid():
+    plan = plan_import([sr(2)], [dbf(2, row=9, removed=True, paid=True)])
+    assert [f.id for f, _ in plan.returned] == [2]
+    assert [f.id for f, _ in plan.unpaid] == [2] and plan.paid == []
+
+
+def test_the_period_accepts_en_and_em_dashes_spaces_and_feb_29():
+    near = date(2026, 11, 22)
+    want = (date(2026, 10, 26), date(2026, 11, 8))
+    for t in ("10/26–11/08", "10/26—11/08", "10/26 - 11/08", "10/26 – 11/08"):
+        assert parse_period(t, near) == want
+    assert parse_period("02/29", date(2028, 3, 1)) == (date(2028, 2, 29), date(2028, 2, 29))

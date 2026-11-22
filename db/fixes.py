@@ -15,7 +15,7 @@ from db.importer import name_key
 VODILY_ID = "1YAXRP2hHJq-TLIsCA8Ovhk9R65FXgIFogc6nfIrbB4A"
 FIXES_TAB = "правки"
 
-_PERIOD = re.compile(r"^\s*(\d{1,2})/(\d{1,2})(?:\s*-\s*(\d{1,2})/(\d{1,2}))?\s*$")
+_PERIOD = re.compile(r"^\s*(\d{1,2})/(\d{1,2})(?:\s*[-–—]\s*(\d{1,2})/(\d{1,2}))?\s*$")
 _WINDOW_DAYS = 183
 
 
@@ -38,7 +38,7 @@ def parse_period(text: str, near: date) -> tuple[date | None, date | None]:
         try:
             start = date(year, m1, d1)
         except ValueError:
-            return None, None
+            continue  # например 02/29 в невисокосном году: смотрим другой год
         gap = abs((start - near).days)
         if gap <= _WINDOW_DAYS and (best is None or gap < best[0]):
             best = (gap, start)
@@ -144,6 +144,7 @@ def plan_import(sheet: list[SheetRow], db: list[DbFix]) -> ImportPlan:
         used.add(f.id)
         if f.removed:
             plan.returned.append((f, r))
+            _match_paid(plan, f, r)  # оплата сверяется с заливкой в этом же переносе
         else:
             plan.seen.append((f, r))
             _match_paid(plan, f, r)

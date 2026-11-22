@@ -35,12 +35,19 @@ class FakeCursor:
     def fetchall(self):
         return self.conn.rows
 
+    def fetchone(self):
+        sql, params = self.conn.log[-1]
+        if sql.startswith("SELECT paid_at"):
+            return (self.conn.paid_at.get(params[0]),)
+        return None
+
 
 class FakeConn:
     def __init__(self, rows=()):
         self.rows = list(rows)
         self.log: list[tuple[str, tuple | None]] = []
         self.commits = 0
+        self.paid_at: dict[int, datetime] = {}
 
     def __enter__(self):
         return self
@@ -100,7 +107,8 @@ def test_apply_inserts_new_rows_with_import_dates_and_logs_the_counts():
     last_sql, last_p = conn.log[-1]
     assert last_sql.startswith("INSERT INTO audit_log") and "'admin:claude'" in last_sql
     assert "'fixes_import'" in last_sql
-    assert json.loads(last_p[0]) == {**counts, "first": False}
+    d = json.loads(last_p[0])
+    assert {k: d[k] for k in (*counts, "first")} == {**counts, "first": False}
 
 
 def test_paid_unpaid_removed_returned_changed_are_updates_that_keep_added_and_created_at():
@@ -171,3 +179,24 @@ def test_the_first_import_refuses_a_non_empty_table(monkeypatch):
     with pytest.raises(SystemExit, match="уже 1"):
         fi.main(["--first", "--apply"])
     assert conn.writes() == []
+
+
+def test_unpaid_keeps_the_old_paid_at_and_the_ids_in_the_audit_details():
+    k = fi.name_key("Ann Test")
+    db = [DbFix(2, k, "11/10", "1 день", 2, True, False),
+          DbFix(3, k, "11/11", "1 день", 3, False, False),
+          DbFix(5, k, "11/13", "1 день", 5, False, False)]
+    sheet = [SheetRow(2, "Ann Test", "11/10", "1 день", False),
+             SheetRow(5, "Ann Test", "11/13", "2 дня", False)]
+    conn = FakeConn()
+    conn.paid_at[2] = datetime(2026, 11, 9, 12, 0, tzinfo=timezone.utc)
+    fi.apply_plan(conn, plan_import(sheet, db), NOW)
+    sqls = [s for s, _ in conn.log]
+    # дата читается раньше, чем обнуляется
+    assert sqls.index("SELECT paid_at FROM payout_fix WHERE id = %s") < \
+        sqls.index("UPDATE payout_fix SET paid = false, paid_at = NULL WHERE id = %s")
+    d = json.loads(conn.log[-1][1][0])
+    assert d["unpaid_ids"] == [{"id": 2, "paid_at": "2026-11-09T12:00:00+00:00"}]
+    assert d["removed_ids"] == [3]
+    assert d["changed_ids"] == [{"id": 5, "was": [k, "11/13", "1 день"]}]
+    assert d["returned_ids"] == []

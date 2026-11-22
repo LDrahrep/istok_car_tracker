@@ -127,6 +127,7 @@ _UPDATE_CHANGED = (
 )
 _UPDATE_SEEN = "UPDATE payout_fix SET sheet_row = %s, imported_at = %s WHERE id = %s"
 _UPDATE_PAID = "UPDATE payout_fix SET paid = true, paid_at = %s WHERE id = %s"
+_SELECT_PAID_AT = "SELECT paid_at FROM payout_fix WHERE id = %s"
 _UPDATE_UNPAID = "UPDATE payout_fix SET paid = false, paid_at = NULL WHERE id = %s"
 _UPDATE_REMOVED = ("UPDATE payout_fix SET removed_at = %s WHERE id = %s"
                    " AND removed_at IS NULL")
@@ -159,15 +160,29 @@ def apply_plan(conn, plan: ImportPlan, now: datetime, first: bool = False) -> di
                 cur.execute(_UPDATE_RETURNED, (r.row, now, f.id))
             for f, r in plan.paid:
                 cur.execute(_UPDATE_PAID, (now, f.id))
+            unpaid_old = []
             for f, r in plan.unpaid:
+                # прежнюю дату оплаты читаем до обнуления и кладём в журнал
+                cur.execute(_SELECT_PAID_AT, (f.id,))
+                row = cur.fetchone()
+                old = row[0] if row else None
+                unpaid_old.append({"id": f.id, "paid_at": old.isoformat() if old else None})
                 cur.execute(_UPDATE_UNPAID, (f.id,))
             for f in plan.removed:
                 cur.execute(_UPDATE_REMOVED, (now, f.id))
             counts = {"new": len(plan.new), "changed": len(plan.changed),
                       "paid": len(plan.paid), "unpaid": len(plan.unpaid),
                       "removed": len(plan.removed), "returned": len(plan.returned)}
-            cur.execute(_AUDIT, (json.dumps({**counts, "first": first},
-                                            ensure_ascii=False),))
+            details = {
+                **counts, "first": first,
+                # id затронутых записей; у изменённых и с снятой оплатой ещё то, что было
+                "changed_ids": [{"id": f.id, "was": [f.driver_key, f.period, f.days_text]}
+                                for f, _ in plan.changed],
+                "removed_ids": [f.id for f in plan.removed],
+                "unpaid_ids": unpaid_old,
+                "returned_ids": [f.id for f, _ in plan.returned],
+            }
+            cur.execute(_AUDIT, (json.dumps(details, ensure_ascii=False),))
         conn.commit()
     except Exception:
         conn.rollback()
