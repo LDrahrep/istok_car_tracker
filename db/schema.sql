@@ -296,3 +296,27 @@ SELECT c.ride_date   AS дата,
                      AS день_засчитан
 FROM carpool c JOIN person d ON d.id = c.driver_id
 GROUP BY c.ride_date, c.driver_id, d.full_name, d.current_site_id;
+
+-- Правки к выплатам водителям: дни, доплачиваемые сверх недельной сводки.
+-- Переносятся из листа «правки» таблицы ВОДИЛЫ (зелёная строка = оплачено); портал читает.
+CREATE TABLE IF NOT EXISTS payout_fix (
+    id           bigserial PRIMARY KEY,
+    driver_name  text NOT NULL,
+    driver_key   text NOT NULL,
+    person_id    bigint REFERENCES person(id) ON DELETE SET NULL,
+    period       text NOT NULL,
+    period_start date,
+    period_end   date,
+    days_text    text NOT NULL,
+    days         integer,
+    sheet_row    integer,
+    added_at     timestamptz,
+    added_how    text NOT NULL CHECK (added_how IN ('import','restored','unknown')),
+    paid         boolean NOT NULL DEFAULT false,
+    paid_at      timestamptz,
+    removed_at   timestamptz,
+    imported_at  timestamptz NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS payout_fix_key_idx   ON payout_fix (driver_key);
+CREATE INDEX IF NOT EXISTS payout_fix_added_idx ON payout_fix (added_at);
