@@ -135,14 +135,30 @@ def test_identical_rows_keep_their_own_records_by_sheet_row():
     plan = plan_import([sr(1), sr(2, green=True)], [dbf(10, row=2, paid=True), dbf(11, row=1)])
     assert plan.empty()
     assert [(f.id, r.row) for f, r in plan.seen] == [(11, 1), (10, 2)]
-    # совпал номер строки — пара по номеру, остальные по порядку
-    plan = plan_import([sr(1), sr(3), sr(5)], [dbf(10, row=3), dbf(11, row=9)])
+    # записи идут к строкам в порядке прежних номеров, а не id; лишняя строка — новая
+    plan = plan_import([sr(1), sr(3), sr(5)], [dbf(10, row=9), dbf(11, row=4)])
     assert [(f.id, r.row) for f, r in plan.seen] == [(11, 1), (10, 3)]
     assert [r.row for r in plan.new] == [5] and plan.removed == []
     # на один номер претендуют действующая и снятая: строку берёт действующая
     plan = plan_import([sr(4)], [dbf(10, row=4, removed=True), dbf(11, row=4)])
     assert [(f.id, r.row) for f, r in plan.seen] == [(11, 4)]
     assert plan.returned == [] and plan.empty()
+
+
+def test_identical_rows_shifted_up_keep_their_payment():
+    # строки 3 (оплачена) и 4; строку выше удалили — теперь они 2 и 3
+    db = [dbf(10, row=3, paid=True), dbf(11, row=4)]
+    plan = plan_import([sr(2, green=True), sr(3)], db)
+    assert [(f.id, r.row) for f, r in plan.seen] == [(10, 2), (11, 3)]
+    assert plan.paid == [] and plan.unpaid == [] and plan.empty()
+
+
+def test_a_shifted_row_stays_with_the_live_record_not_a_removed_twin():
+    # действующая 20 (строка 5, оплачена) и давно снятая 10 (строка 3); строка съехала на 4
+    db = [dbf(10, row=3, removed=True), dbf(20, row=5, paid=True)]
+    plan = plan_import([sr(4, green=True)], db)
+    assert [(f.id, r.row) for f, r in plan.seen] == [(20, 4)]
+    assert plan.returned == [] and plan.removed == [] and plan.empty()
 
 
 def test_a_name_written_differently_is_renamed_to_the_sheet_text():

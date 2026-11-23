@@ -2,8 +2,8 @@
 
 Здесь только чистая логика, без Google и базы: чтение листа и запись в базу
 делает скрипт переноса поверх этих функций. Правка узнаётся между переносами
-по тройке (ключ имени, период, текст дней); среди одинаковых троек — сперва по
-номеру строки (sheet_row), остальные по порядку.
+по тройке (ключ имени, период, текст дней); одинаковые тройки — в порядке
+прежних номеров строк (sheet_row).
 """
 from __future__ import annotations
 
@@ -135,29 +135,21 @@ def _match_paid(plan: ImportPlan, fix: DbFix, row: SheetRow) -> None:
 def _pair_triples(sheet: list[SheetRow], db: list[DbFix]) -> dict[int, DbFix]:
     """Номер строки листа → запись базы с той же тройкой.
 
-    Внутри группы одинаковых троек запись сперва берёт строку со своим
-    sheet_row (на один номер — сперва действующая), остальные по порядку:
-    k-я свободная строка листа ↔ k-я свободная запись по id. Иначе две
-    одинаковые строки, стоящие не в порядке id, менялись бы оплатой.
+    Внутри группы одинаковых троек k-я строка листа ↔ k-я запись в порядке
+    прежних номеров строк: сперва действующие, без номера — в конце, при
+    равенстве — по id. Точный номер не сверяется: строки съезжают, когда
+    выше удаляют строку, а порядок одинаковых между собой сохраняется.
+    Иначе одинаковые строки, стоящие не в порядке id, менялись бы оплатой.
     """
     rows_by_triple: dict[tuple, list[SheetRow]] = {}
     for r in sheet:
         rows_by_triple.setdefault((r.key, r.period, r.days_text), []).append(r)
     db_by_triple: dict[tuple, list[DbFix]] = {}
-    for f in sorted(db, key=lambda f: (f.removed, f.id)):
+    for f in sorted(db, key=lambda f: (f.removed, f.sheet_row is None, f.sheet_row or 0, f.id)):
         db_by_triple.setdefault((f.driver_key, f.period, f.days_text), []).append(f)
     pair: dict[int, DbFix] = {}
     for t, rows in rows_by_triple.items():
-        free = {r.row for r in rows}
-        rest = []
-        for f in db_by_triple.get(t, []):
-            if f.sheet_row in free:
-                pair[f.sheet_row] = f
-                free.discard(f.sheet_row)
-            else:
-                rest.append(f)
-        rest.sort(key=lambda f: f.id)
-        for r, f in zip([r for r in rows if r.row in free], rest):
+        for r, f in zip(rows, db_by_triple.get(t, [])):
             pair[r.row] = f
     return pair
 
