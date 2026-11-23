@@ -20,8 +20,10 @@ def sr(row, name="Ivan Testov", period="10/31", days="1 день", green=False):
 
 
 def dbf(id, name="Ivan Testov", period="10/31", days="1 день", row=None,
-        paid=False, removed=False):
-    return DbFix(id, SheetRow(0, name, period, days, False).key, period, days, row, paid, removed)
+        paid=False, removed=False, shown=None):
+    """shown — driver_name в базе, если записан не так, как name."""
+    return DbFix(id, SheetRow(0, name, period, days, False).key, period, days, row, paid, removed,
+                 name if shown is None else shown)
 
 
 def test_green_is_the_sheets_green_and_its_light_shades():
@@ -126,3 +128,32 @@ def test_the_period_accepts_en_and_em_dashes_spaces_and_feb_29():
     for t in ("10/26–11/08", "10/26—11/08", "10/26 - 11/08", "10/26 – 11/08"):
         assert parse_period(t, near) == want
     assert parse_period("02/29", date(2028, 3, 1)) == (date(2028, 2, 29), date(2028, 2, 29))
+
+
+def test_identical_rows_keep_their_own_records_by_sheet_row():
+    # запись 11 стоит в листе выше записи 10: заливка не должна переезжать между ними
+    plan = plan_import([sr(1), sr(2, green=True)], [dbf(10, row=2, paid=True), dbf(11, row=1)])
+    assert plan.empty()
+    assert [(f.id, r.row) for f, r in plan.seen] == [(11, 1), (10, 2)]
+    # совпал номер строки — пара по номеру, остальные по порядку
+    plan = plan_import([sr(1), sr(3), sr(5)], [dbf(10, row=3), dbf(11, row=9)])
+    assert [(f.id, r.row) for f, r in plan.seen] == [(11, 1), (10, 3)]
+    assert [r.row for r in plan.new] == [5] and plan.removed == []
+    # на один номер претендуют действующая и снятая: строку берёт действующая
+    plan = plan_import([sr(4)], [dbf(10, row=4, removed=True), dbf(11, row=4)])
+    assert [(f.id, r.row) for f, r in plan.seen] == [(11, 4)]
+    assert plan.returned == [] and plan.empty()
+
+
+def test_a_name_written_differently_is_renamed_to_the_sheet_text():
+    plan = plan_import([sr(1, "Ivan  TESTOV")], [dbf(7, row=1, shown="Testov Ivan")])
+    assert [(f.id, r.row) for f, r in plan.renamed] == [(7, 1)]
+    assert [f.id for f, _ in plan.seen] == [7] and not plan.empty()
+    # тот же текст — менять нечего
+    assert plan_import([sr(1)], [dbf(7, row=1)]).empty()
+    # вернувшаяся строка с другим написанием тоже берёт имя из листа
+    plan = plan_import([sr(2, "Testov Ivan")], [dbf(8, row=9, removed=True)])
+    assert [f.id for f, _ in plan.returned] == [8] and [f.id for f, _ in plan.renamed] == [8]
+    # исправленная опечатка («изменена») переписывает имя сама и в renamed не попадает
+    plan = plan_import([sr(5, "Ivan Testov")], [dbf(3, "Ivan Testof", row=5)])
+    assert [f.id for f, _ in plan.changed] == [3] and plan.renamed == []

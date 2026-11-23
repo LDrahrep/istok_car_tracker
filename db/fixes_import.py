@@ -20,6 +20,8 @@ from db.fixes import (FIXES_TAB, VODILY_ID, DbFix, ImportPlan, SheetRow,
 from db.importer import name_key
 
 CHICAGO = ZoneInfo("America/Chicago")
+# Перенос лист только читает: ключ бота, но с областью только на чтение.
+READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
 
 _D9 = date(2026, 11, 9)
 _D13 = date(2026, 11, 13)
@@ -105,7 +107,8 @@ def read_sheet(client) -> list[SheetRow]:
 def read_db(conn) -> list[DbFix]:
     with conn.cursor() as cur:
         cur.execute("SELECT id, driver_key, period, days_text, sheet_row, paid,"
-                    " removed_at IS NOT NULL FROM payout_fix ORDER BY id")
+                    " removed_at IS NOT NULL, driver_name, added_at, paid_at"
+                    " FROM payout_fix ORDER BY id")
         return [DbFix(*r) for r in cur.fetchall()]
 
 
@@ -126,6 +129,11 @@ _UPDATE_CHANGED = (
     " sheet_row = %s, imported_at = %s WHERE id = %s"
 )
 _UPDATE_SEEN = "UPDATE payout_fix SET sheet_row = %s, imported_at = %s WHERE id = %s"
+# Узнанная строка с другим написанием имени: имя как в листе, человек — по новому ключу.
+_UPDATE_NAME = (
+    "UPDATE payout_fix SET driver_name = %s, driver_key = %s,"
+    " person_id = (SELECT id FROM person WHERE name_key = %s) WHERE id = %s"
+)
 _UPDATE_PAID = "UPDATE payout_fix SET paid = true, paid_at = %s WHERE id = %s"
 _SELECT_PAID_AT = "SELECT paid_at FROM payout_fix WHERE id = %s"
 _UPDATE_UNPAID = "UPDATE payout_fix SET paid = false, paid_at = NULL WHERE id = %s"
@@ -150,7 +158,8 @@ def apply_plan(conn, plan: ImportPlan, now: datetime, first: bool = False) -> di
                                       r.days_text, parse_days(r.days_text), r.row,
                                       added_at, how, r.green, paid_at, now))
             for f, r in plan.changed:
-                start, end = parse_period(r.period, today)
+                # год периода — от даты добавления записи, а не от сегодняшнего переноса
+                start, end = parse_period(r.period, f.added_at.date() if f.added_at else today)
                 cur.execute(_UPDATE_CHANGED, (r.name, r.key, r.key, r.period, start,
                                               end, r.days_text, parse_days(r.days_text),
                                               r.row, now, f.id))
@@ -158,6 +167,8 @@ def apply_plan(conn, plan: ImportPlan, now: datetime, first: bool = False) -> di
                 cur.execute(_UPDATE_SEEN, (r.row, now, f.id))
             for f, r in plan.returned:
                 cur.execute(_UPDATE_RETURNED, (r.row, now, f.id))
+            for f, r in plan.renamed:
+                cur.execute(_UPDATE_NAME, (r.name, r.key, r.key, f.id))
             for f, r in plan.paid:
                 cur.execute(_UPDATE_PAID, (now, f.id))
             unpaid_old = []
@@ -172,7 +183,8 @@ def apply_plan(conn, plan: ImportPlan, now: datetime, first: bool = False) -> di
                 cur.execute(_UPDATE_REMOVED, (now, f.id))
             counts = {"new": len(plan.new), "changed": len(plan.changed),
                       "paid": len(plan.paid), "unpaid": len(plan.unpaid),
-                      "removed": len(plan.removed), "returned": len(plan.returned)}
+                      "removed": len(plan.removed), "returned": len(plan.returned),
+                      "renamed": len(plan.renamed)}
             details = {
                 **counts, "first": first,
                 # id затронутых записей; у изменённых и с снятой оплатой ещё то, что было
@@ -181,6 +193,7 @@ def apply_plan(conn, plan: ImportPlan, now: datetime, first: bool = False) -> di
                 "removed_ids": [f.id for f in plan.removed],
                 "unpaid_ids": unpaid_old,
                 "returned_ids": [f.id for f, _ in plan.returned],
+                "renamed_ids": [{"id": f.id, "was": f.driver_name} for f, _ in plan.renamed],
             }
             cur.execute(_AUDIT, (json.dumps(details, ensure_ascii=False),))
         conn.commit()
@@ -196,19 +209,34 @@ def _line(r: SheetRow) -> str:
     return f"строка {r.row}: {r.name} · {r.period} · {r.days_text}"
 
 
-def format_plan(plan: ImportPlan) -> str:
+def _when(dt: datetime | None) -> str:
+    return dt.astimezone(CHICAGO).strftime("%Y-%m-%d %H:%M %Z") if dt else "неизвестно"
+
+
+def _new_line(r: SheetRow, now: datetime, first: bool) -> str:
+    """Новая строка и то, что --apply запишет ей в added_at и paid_at."""
+    added_at, how, paid_at = seed_dates(r, now, first)
+    paid = (f"зелёная → оплачена, paid_at {_when(paid_at)}" if r.green
+            else "белая → не оплачена")
+    return f"{_line(r)}; added_at {_when(added_at)} ({how}); {paid}"
+
+
+def format_plan(plan: ImportPlan, now: datetime, first: bool = False) -> str:
     out = []
 
     def block(title, items):
         out.append(f"{title}: {len(items)}")
         out.extend(f"  {i}" for i in items)
 
-    block("Новые", [_line(r) for r in plan.new])
-    block("Изменены", [f"id {f.id}: {f.driver_key} · {f.period} · {f.days_text}"
+    block("Новые", [_new_line(r, now, first) for r in plan.new])
+    block("Изменены", [f"id {f.id}: {f.driver_name or f.driver_key} · {f.period} · {f.days_text}"
                        f" -> {_line(r)}" for f, r in plan.changed])
-    block("Оплачены", [f"id {f.id}, {_line(r)}" for f, r in plan.paid])
+    block("Имя как в листе", [f"id {f.id}: {f.driver_name} -> {_line(r)}"
+                              for f, r in plan.renamed])
+    block("Оплачены", [f"id {f.id}, {_line(r)}; paid_at → {_when(now)}" for f, r in plan.paid])
     block("СНЯТА ОПЛАТА (бывает только по ошибке)",
-          [f"id {f.id}, {_line(r)}" for f, r in plan.unpaid])
+          [f"id {f.id}, {_line(r)}; paid_at {_when(f.paid_at)} → пусто"
+           for f, r in plan.unpaid])
     block("Сняты (нет в листе)", [f"id {f.id}: {f.driver_key} · {f.period} · {f.days_text}"
                                   for f in plan.removed])
     block("Вернулись", [f"id {f.id}, {_line(r)}" for f, r in plan.returned])
@@ -217,9 +245,14 @@ def format_plan(plan: ImportPlan) -> str:
 
 
 def _client():
+    """gspread с ключом сервисного аккаунта бота, но с областью только на чтение."""
+    import gspread
+    from google.oauth2.service_account import Credentials
+
     from config import Config
-    from sheets import SheetManager
-    return SheetManager(Config()).client
+    info = json.loads(Config().GOOGLE_CREDENTIALS)
+    creds = Credentials.from_service_account_info(info, scopes=[READONLY_SCOPE])
+    return gspread.authorize(creds)
 
 
 def _connect():
@@ -241,8 +274,12 @@ def main(argv: list[str]) -> int:
         db = read_db(conn)
         if first and db:
             raise SystemExit(f"Первый перенос: в payout_fix уже {len(db)} строк. Ничего не записано.")
+        if not first and not db:
+            raise SystemExit("payout_fix пуста: первый перенос запускайте с --first, он восстанавливает "
+                             "даты добавления и оплаты. Без --first у всех строк было бы added_at = "
+                             "момент переноса и added_how = import. Ничего не записано.")
         plan = plan_import(sheet, db)
-        print(format_plan(plan))
+        print(format_plan(plan, now, first))
         if not apply:
             print("\nПробный прогон: ничего не записано. Для записи добавьте --apply.")
             return 0

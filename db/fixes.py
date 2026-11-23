@@ -2,13 +2,14 @@
 
 Здесь только чистая логика, без Google и базы: чтение листа и запись в базу
 делает скрипт переноса поверх этих функций. Правка узнаётся между переносами
-по тройке (ключ имени, период, текст дней) и порядку среди одинаковых троек.
+по тройке (ключ имени, период, текст дней); среди одинаковых троек — сперва по
+номеру строки (sheet_row), остальные по порядку.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 
 from db.importer import name_key
 
@@ -90,7 +91,10 @@ def rows_from_sheet(values: list[list[str]], colors: list[dict]) -> list[SheetRo
 
 @dataclass(frozen=True)
 class DbFix:
-    """Запись payout_fix в том виде, что нужна для сравнения."""
+    """Запись payout_fix в том виде, что нужна для сравнения.
+
+    driver_name None — имя неизвестно, с листом не сверяется.
+    """
     id: int
     driver_key: str
     period: str
@@ -98,6 +102,9 @@ class DbFix:
     sheet_row: int | None
     paid: bool
     removed: bool
+    driver_name: str | None = None
+    added_at: datetime | None = None
+    paid_at: datetime | None = None
 
 
 @dataclass
@@ -109,11 +116,13 @@ class ImportPlan:
     removed: list[DbFix] = field(default_factory=list)
     returned: list[tuple[DbFix, SheetRow]] = field(default_factory=list)
     seen: list[tuple[DbFix, SheetRow]] = field(default_factory=list)
+    # узнанные (seen/returned), у которых имя в листе написано не так, как в базе
+    renamed: list[tuple[DbFix, SheetRow]] = field(default_factory=list)
 
     def empty(self) -> bool:
         """Менять нечего: допускается только seen (узнанные без изменений)."""
         return not (self.new or self.changed or self.paid or self.unpaid
-                    or self.removed or self.returned)
+                    or self.removed or self.returned or self.renamed)
 
 
 def _match_paid(plan: ImportPlan, fix: DbFix, row: SheetRow) -> None:
@@ -123,25 +132,50 @@ def _match_paid(plan: ImportPlan, fix: DbFix, row: SheetRow) -> None:
         plan.unpaid.append((fix, row))
 
 
+def _pair_triples(sheet: list[SheetRow], db: list[DbFix]) -> dict[int, DbFix]:
+    """Номер строки листа → запись базы с той же тройкой.
+
+    Внутри группы одинаковых троек запись сперва берёт строку со своим
+    sheet_row (на один номер — сперва действующая), остальные по порядку:
+    k-я свободная строка листа ↔ k-я свободная запись по id. Иначе две
+    одинаковые строки, стоящие не в порядке id, менялись бы оплатой.
+    """
+    rows_by_triple: dict[tuple, list[SheetRow]] = {}
+    for r in sheet:
+        rows_by_triple.setdefault((r.key, r.period, r.days_text), []).append(r)
+    db_by_triple: dict[tuple, list[DbFix]] = {}
+    for f in sorted(db, key=lambda f: (f.removed, f.id)):
+        db_by_triple.setdefault((f.driver_key, f.period, f.days_text), []).append(f)
+    pair: dict[int, DbFix] = {}
+    for t, rows in rows_by_triple.items():
+        free = {r.row for r in rows}
+        rest = []
+        for f in db_by_triple.get(t, []):
+            if f.sheet_row in free:
+                pair[f.sheet_row] = f
+                free.discard(f.sheet_row)
+            else:
+                rest.append(f)
+        rest.sort(key=lambda f: f.id)
+        for r, f in zip([r for r in rows if r.row in free], rest):
+            pair[r.row] = f
+    return pair
+
+
 def plan_import(sheet: list[SheetRow], db: list[DbFix]) -> ImportPlan:
     plan = ImportPlan()
-    # 1. Точные тройки: k-я такая строка листа ↔ k-я такая запись базы (по id).
-    db_by_triple: dict[tuple, list[DbFix]] = {}
-    for f in sorted(db, key=lambda f: f.id):
-        db_by_triple.setdefault((f.driver_key, f.period, f.days_text), []).append(f)
+    # 1. Точные тройки (см. _pair_triples).
+    pair = _pair_triples(sheet, db)
     used: set[int] = set()
     rest_rows: list[SheetRow] = []
-    seen_count: dict[tuple, int] = {}
     for r in sheet:
-        t = (r.key, r.period, r.days_text)
-        k = seen_count.get(t, 0)
-        seen_count[t] = k + 1
-        cands = db_by_triple.get(t, [])
-        if k >= len(cands):
+        f = pair.get(r.row)
+        if f is None:
             rest_rows.append(r)
             continue
-        f = cands[k]
         used.add(f.id)
+        if f.driver_name is not None and f.driver_name != r.name:
+            plan.renamed.append((f, r))  # регистр, пробелы, порядок слов — как в листе
         if f.removed:
             plan.returned.append((f, r))
             _match_paid(plan, f, r)  # оплата сверяется с заливкой в этом же переносе
